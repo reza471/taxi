@@ -195,7 +195,8 @@ void get_SettingData()
     {
         HTTPClient http;
         String macStr = WiFi.macAddress();
-        http.begin(GetSettingURL+macStr); // Replace `GetSettingURL` with your URL string
+        macStr.replace(":", "");
+        http.begin(GetSettingURL+macStr); 
         int httpResponseCode = http.GET();
 
         if (httpResponseCode == 200) // HTTP OK
