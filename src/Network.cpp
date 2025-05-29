@@ -25,8 +25,11 @@ const char *PostServiceURL = "https://node.raxitaxi.ir/api/taxi/StartService?"; 
 // const char *ssid = "TP-LINK_5EE9B8";
 // const char *password = "92519251**";
 
-const char *ssid = "dd-wrt_vap";
-const char *password = "73147314**iI";
+// const char *ssid = "dd-wrt_vap";
+// const char *password = "73147314**iI";
+
+const char *ssid = "Rad";
+const char *password = "123456789";
 
 // NTP server configuration
 const char *ntpServer = "ntp.day.ir";
