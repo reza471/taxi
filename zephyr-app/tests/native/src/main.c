@@ -14,8 +14,10 @@
 #include "postq.h"
 #include "tariff.h"
 #include "trip_store.h"
+#include "report.h"
 
 extern int stub_config_calls;
+extern int32_t stub_day;
 
 static int phase = -1;
 
@@ -179,6 +181,19 @@ ZTEST(taxi, test_f_tariff_without_wifi_keeps_wifi)
 	zassert_equal(persist.t1.pm, 50);
 }
 
+/* ---------- report helpers ---------- */
+static void expect_hist(int newest_total, int n)
+{
+	rep_entry_t e;
+
+	zassert_equal(report_hist_count(), n);
+	for (int i = 0; i < n; i++) {
+		zassert_true(report_hist_get(i, &e));
+		zassert_equal(e.total_rial, newest_total - i * 1000, "entry %d", i);
+	}
+	zassert_false(report_hist_get(n, &e));
+}
+
 /* ---------- running trip saved in flash ---------- */
 static void make_running_trip(trip_state_t *st)
 {
@@ -248,6 +263,34 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 			make_running_trip(&st);
 			zassert_true(trip_store_save(&st));
 		}
+		/* report: 12 trips on day 100, only the last 10 stay in the history */
+		stub_day = 100;
+		for (int i = 1; i <= 12; i++) {
+			char hm[8];
+
+			snprintf(hm, sizeof(hm), "%02d:%02d", 8 + i / 2, (i % 2) * 30);
+			report_add(5, i * 1000, i * 100, hm);
+		}
+		{
+			int64_t total;
+			int count;
+
+			report_today(&total, &count);
+			zassert_equal(total, 78000);
+			zassert_equal(count, 12);
+		}
+		expect_hist(12000, REPORT_HIST);
+		{
+			rep_entry_t e;
+
+			zassert_true(report_hist_get(0, &e));
+			zassert_equal(e.hhmm, 1400, "start time of the newest trip");
+			zassert_equal(e.dist_m, 1200);
+			zassert_equal(e.bt, 5);
+		}
+		zassert_true(report_dirty());
+		report_flush();
+		zassert_false(report_dirty());
 		break;
 	case 0: /* after reboot: everything must be back, in order */
 		zassert_equal(postq_count(), 3, "queue lost after reboot: %d", postq_count());
@@ -255,6 +298,26 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		zassert_str_equal(b, "/x/SetTaxiStart?n=1");
 		postq_pop();
 		postq_flush(); /* the first one was "sent" */
+		{
+			/* report survived the power loss: same day, same totals, same history */
+			int64_t total;
+			int count;
+
+			stub_day = 100;
+			report_today(&total, &count);
+			zassert_equal(total, 78000, "daily total lost: %lld", (long long)total);
+			zassert_equal(count, 12);
+			expect_hist(12000, REPORT_HIST);
+
+			/* next day: today starts from zero, history stays */
+			stub_day = 101;
+			report_today(&total, &count);
+			zassert_equal(total, 0);
+			zassert_equal(count, 0);
+			expect_hist(12000, REPORT_HIST);
+			report_add(1, 5000, 50, "07:15");
+			report_flush();
+		}
 		{
 			/* the running trip comes back exactly as it was saved */
 			trip_state_t st, want;
@@ -274,6 +337,23 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		}
 		break;
 	case 1: /* after a second reboot: only the two left, still in order */
+		{
+			int64_t total;
+			int count;
+			rep_entry_t e;
+
+			stub_day = 101;
+			report_today(&total, &count);
+			zassert_equal(total, 5000, "new day total lost");
+			zassert_equal(count, 1);
+			zassert_equal(report_hist_count(), REPORT_HIST);
+			zassert_true(report_hist_get(0, &e));
+			zassert_equal(e.total_rial, 5000);
+			zassert_equal(e.bt, 1);
+			zassert_equal(e.hhmm, 715);
+			zassert_true(report_hist_get(1, &e));
+			zassert_equal(e.total_rial, 12000);
+		}
 		zassert_equal(postq_count(), 2, "got %d", postq_count());
 		zassert_true(postq_peek(b, sizeof(b)));
 		zassert_str_equal(b, "/x/SetTaxiEnd?n=1&total=12345");
@@ -321,6 +401,22 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		postq_pop();
 		postq_flush();
 		zassert_equal(postq_count(), 0);
+		{
+			/* clock not set: totals keep adding up and are never reset */
+			int64_t total, before;
+			int count, cbefore;
+
+			stub_day = -1;
+			report_today(&before, &cbefore);
+			report_add(5, 1234, 10, "xx");
+			report_today(&total, &count);
+			zassert_equal(total, before + 1234);
+			zassert_equal(count, cbefore + 1);
+			rep_entry_t e;
+
+			zassert_true(report_hist_get(0, &e));
+			zassert_equal(e.hhmm, -1, "unknown start time");
+		}
 		next = 99; /* done */
 		break;
 	default:

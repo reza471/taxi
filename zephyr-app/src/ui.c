@@ -12,6 +12,9 @@
 #include "ui.h"
 #include "net.h"
 #include "wdog.h"
+#include "report.h"
+#include "postq.h"
+#include "version.h"
 
 LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 
@@ -20,7 +23,8 @@ LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 #define BASE_FARE_SHOW_MS 2000
 #define BLINK_MS 4000
 
-enum page { P_MAIN, P_MENU, P_SAMAR, P_RESERVE, P_PULSE, P_FARE1, P_FARE4, P_OFF };
+enum page { P_MAIN, P_MENU, P_SAMAR, P_RESERVE, P_PULSE, P_FARE1, P_FARE4, P_OFF,
+	    P_INFO, P_REPORT, P_CAL };
 
 static const struct gpio_dt_spec backlight = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), backlight_gpios);
 
@@ -74,44 +78,79 @@ static void page_off(void)
 
 /* ---------------- MAIN ---------------- */
 static uint8_t menu_flag;
+static bool show_speed;      /* K3 toggles the small field: clock <-> speed */
+static int64_t msg_until;    /* timed error text on the big field */
+static char msg_text[16];
+
+/* error codes on the 7-segment display (E-xxx) */
+#define ERR_EXPIRED "E-403   " /* license expired (server answered 403) */
+#define ERR_MODE_OFF "E-001   " /* this meter mode is switched off in the tariff */
+
+static void show_error(const char *code)
+{
+	snprintf(msg_text, sizeof(msg_text), "%s", code);
+	msg_until = now + 2000;
+	beep(600, 300); /* one long low beep = "no" */
+}
 
 static void page_main(void)
 {
-	static int64_t show_until;
+	if (now < msg_until) {
+		snprintf(big, sizeof(big), "%s", msg_text);
+	} else if (!meter_cfg.authorized) {
+		snprintf(big, sizeof(big), ERR_EXPIRED); /* stays until the server accepts again */
+	} else {
+		snprintf(big, sizeof(big), "--------");
+	}
 
-	ARG_UNUSED(show_until);
-	snprintf(big, sizeof(big), "--------");
-	show_clock();
+	if (show_speed) {
+		snprintf(small_, sizeof(small_), "%4d", clampi(meter_speed_kmh(), 0, 999));
+		colon = false;
+	} else {
+		show_clock();
+	}
 
+	if (PRESSED(3)) {
+		show_speed = !show_speed;
+	}
 	/* hold K3 for 10 s: reset WiFi settings and restart */
 	if (STILL(3) && k.hold_ms > 10000) {
 		net_reset_wifi();
 	}
 
-	if (!meter_cfg.authorized) {
-		return;
-	}
-
-	if (PRESSED(1) && meter_cfg.korsi) {
-		BEEP_MENU();
-		meter_start(0, true);
-		net_trip_start(1);
-		goto_page(P_FARE4);
-		return;
+	if (PRESSED(1)) {
+		if (!meter_cfg.authorized) {
+			show_error(ERR_EXPIRED);
+		} else if (!meter_cfg.korsi) {
+			show_error(ERR_MODE_OFF);
+		} else {
+			BEEP_MENU();
+			meter_start(0, true);
+			net_trip_start(1);
+			goto_page(P_FARE4);
+			return;
+		}
 	}
 	if (PRESSED(2)) {
 		meter_clear_total();
 		goto_page(P_PULSE);
 		return;
 	}
-	if (PRESSED(4) && meter_cfg.darbast) {
-		BEEP_MENU();
-		meter_start(0, false);
-		net_trip_start(5);
-		goto_page(P_FARE1);
-		return;
+	if (PRESSED(4)) {
+		if (!meter_cfg.authorized) {
+			show_error(ERR_EXPIRED);
+		} else if (!meter_cfg.darbast) {
+			show_error(ERR_MODE_OFF);
+		} else {
+			BEEP_MENU();
+			meter_start(0, false);
+			net_trip_start(5);
+			goto_page(P_FARE1);
+			return;
+		}
 	}
 
+	/* menu and power off work even when the license is expired */
 	if (STILL(5)) {
 		if (k.hold_ms > 3000 && menu_flag == 0) {
 			BEEP_MENU();
@@ -131,8 +170,26 @@ static void page_main(void)
 	}
 }
 
-/* ---------------- MENU ---------------- */
+/* ---------------- MENU (2 pages of items) ----------------
+ * Page 1:  K1 MORE   K2 SAMR   K3 NOBT   K4 TARF   K5 back
+ * Page 2:  K1 MORE   K2 INFO   K3 REPT   K4 CAL    K5 back
+ * K1 switches the page at once. Other keys: press once = show the name, press again = enter.
+ */
 static uint8_t menu_sel;
+static uint8_t menu_pg;
+
+static bool menu_pick(int key, const char *label, int id)
+{
+	/* returns true when this item was confirmed (second press) */
+	snprintf(small_, sizeof(small_), "%s", label);
+	if (menu_sel == id) {
+		menu_sel = 0;
+		return true;
+	}
+	menu_sel = id;
+	(void)key;
+	return false;
+}
 
 static void page_menu(void)
 {
@@ -140,45 +197,45 @@ static void page_menu(void)
 	snprintf(big, sizeof(big), "MENU    ");
 
 	if (RELEASED(1)) {
-		snprintf(small_, sizeof(small_), "----");
-		if (menu_sel == 1) {
-			menu_sel = 0;
-			goto_page(P_MAIN);
-			return;
-		}
-		menu_sel = 1;
+		menu_pg = !menu_pg;
+		menu_sel = 0;
 	}
-	if (RELEASED(2) && meter_cfg.samar) {
-		snprintf(small_, sizeof(small_), "SAMR");
-		if (menu_sel == 2) {
-			menu_sel = 0;
+	if (menu_sel == 0 && !(RELEASED(2) || RELEASED(3) || RELEASED(4))) {
+		snprintf(small_, sizeof(small_), menu_pg ? "P-2 " : "P-1 ");
+	}
+
+	if (menu_pg == 0) {
+		if (RELEASED(2) && meter_cfg.samar && menu_pick(2, "SAMR", 2)) {
 			goto_page(P_SAMAR);
 			return;
 		}
-		menu_sel = 2;
-	}
-	if (RELEASED(3) && meter_cfg.nobat) {
-		snprintf(small_, sizeof(small_), "NOBT");
-		if (menu_sel == 3) {
-			menu_sel = 0;
+		if (RELEASED(3) && meter_cfg.nobat && menu_pick(3, "NOBT", 3)) {
 			goto_page(P_RESERVE);
 			return;
 		}
-		menu_sel = 3;
-	}
-	if (RELEASED(4)) {
-		snprintf(small_, sizeof(small_), "TARF");
-		if (menu_sel == 4) {
-			menu_sel = 0;
+		if (RELEASED(4) && menu_pick(4, "TARF", 4)) {
 			net_reload_tariff();
 			goto_page(P_MAIN);
 			return;
 		}
-		menu_sel = 4;
+	} else {
+		if (RELEASED(2) && menu_pick(2, "INFO", 12)) {
+			goto_page(P_INFO);
+			return;
+		}
+		if (RELEASED(3) && menu_pick(3, "rEPT", 13)) {
+			goto_page(P_REPORT);
+			return;
+		}
+		if (RELEASED(4) && menu_pick(4, "CAL ", 14)) {
+			goto_page(P_CAL);
+			return;
+		}
 	}
 	if (RELEASED(5)) {
 		BEEP_MENU();
 		menu_sel = 0;
+		menu_pg = 0;
 		goto_page(P_MAIN);
 	}
 }
@@ -353,6 +410,7 @@ static void page_fare1(void)
 		if (blinking) {
 			BEEP_MENU();
 			trip_submit(5, &s, s.start_hhmm);
+			report_add(5, s.total_rial, s.dist_m, s.start_hhmm);
 			meter_stop(0);
 			entered = false;
 			goto_page(P_MAIN);
@@ -423,6 +481,7 @@ static void page_fare4(void)
 		}
 		if (cur == n && blinking) {
 			trip_submit(n + 1, &s[n], s[n].start_hhmm);
+			report_add(n + 1, s[n].total_rial, s[n].dist_m, s[n].start_hhmm);
 			meter_stop(n);
 			blink_until = 0;
 		} else {
@@ -434,6 +493,168 @@ static void page_fare4(void)
 	if (!meter_any_active()) {
 		entered = false;
 		goto_page(P_MAIN);
+	}
+}
+
+/* ---------------- INFO: status of the device ----------------
+ * K2 next, K3 previous, K5 exit. Pages (big field / small field):
+ *   1 NET  ON / NET OFF           2 HOST UP / HOST BAD / HOST ---
+ *   3 PEND  n (records waiting)   4 serial: first 8 chars big, last 4 small
+ *   5 SOFT 0.1                    6 TIME SET / TIME ---
+ * (letters K Q V W X are not readable on 7 segments, so they are not used)
+ */
+#define INFO_PAGES 6
+
+static void page_info(void)
+{
+	static int idx;
+	const char *ser = net_serial();
+
+	colon = false;
+	snprintf(small_, sizeof(small_), "%d-%d ", idx + 1, INFO_PAGES);
+
+	switch (idx) {
+	case 0:
+		snprintf(big, sizeof(big), net_wifi_connected() ? "NET  ON " : "NET OFF ");
+		break;
+	case 1: {
+		int st = net_server_state();
+
+		snprintf(big, sizeof(big), st > 0 ? "HOST UP " : (st < 0 ? "HOST BAD" : "HOST ---"));
+		break;
+	}
+	case 2:
+		snprintf(big, sizeof(big), "PEND %3d", clampi(postq_count(), 0, 999));
+		break;
+	case 3:
+		if (strlen(ser) == 12) {
+			snprintf(big, sizeof(big), "%.8s", ser);
+			snprintf(small_, sizeof(small_), "%.4s", ser + 8);
+		} else {
+			snprintf(big, sizeof(big), "--------");
+			snprintf(small_, sizeof(small_), "----");
+		}
+		break;
+	case 4:
+		snprintf(big, sizeof(big), "SOFT %s", FW_VERSION);
+		break;
+	default:
+		snprintf(big, sizeof(big), clock_is_set() ? "TIME SET" : "TIME ---");
+		break;
+	}
+
+	if (PRESSED(2)) {
+		idx = (idx + 1) % INFO_PAGES;
+	}
+	if (PRESSED(3)) {
+		idx = (idx + INFO_PAGES - 1) % INFO_PAGES;
+	}
+	if (PRESSED(5)) {
+		idx = 0;
+		goto_page(P_MENU);
+	}
+}
+
+/* ---------------- REPORT: today and the last trips ----------------
+ * K2 next, K3 previous, K5 exit.
+ *   page 1: total of today in Toman, small field "SUM "
+ *   page 2: number of trips today,   small field "CNT "
+ *   page 3..: last trips, newest first: fare in Toman, small field = start time (HHMM)
+ */
+static void page_report(void)
+{
+	static int idx;
+	int64_t total;
+	int count;
+	int pages;
+
+	report_today(&total, &count);
+	pages = 2 + report_hist_count();
+	idx = clampi(idx, 0, pages - 1);
+	colon = false;
+
+	if (idx == 0) {
+		snprintf(big, sizeof(big), "%8lu", (unsigned long)(total / 10 % 100000000));
+		snprintf(small_, sizeof(small_), "SUM ");
+	} else if (idx == 1) {
+		snprintf(big, sizeof(big), "%8d", clampi(count, 0, 99999999));
+		snprintf(small_, sizeof(small_), "CNT ");
+	} else {
+		rep_entry_t e;
+
+		if (report_hist_get(idx - 2, &e)) {
+			snprintf(big, sizeof(big), "%8lu",
+				 (unsigned long)(((unsigned)e.total_rial) / 10 % 100000000));
+			if (e.hhmm >= 0) {
+				snprintf(small_, sizeof(small_), "%04d", e.hhmm);
+				colon = true;
+			} else {
+				snprintf(small_, sizeof(small_), "----");
+			}
+		}
+	}
+
+	if (PRESSED(2)) {
+		idx = (idx + 1) % pages;
+	}
+	if (PRESSED(3)) {
+		idx = (idx + pages - 1) % pages;
+	}
+	if (PRESSED(5)) {
+		idx = 0;
+		goto_page(P_MENU);
+	}
+}
+
+/* ---------------- CAL: measure PM (pulses per 10 m) ----------------
+ * Drive exactly 100 m.  K2 = start, K2 again = stop.  The screen shows PM = pulses / 10.
+ * K3 switches between the measured PM and the PM of the server tariff. K4 = measure again.
+ * This only MEASURES. The tariff PM comes from the server, so tell the office the number.
+ */
+static void page_cal(void)
+{
+	static int state; /* 0 ready, 1 counting, 2 result */
+	static uint32_t base, result;
+	static bool show_server;
+
+	colon = false;
+	if (state == 0) {
+		snprintf(big, sizeof(big), "CAL 100 ");
+		snprintf(small_, sizeof(small_), "GO  ");
+		if (PRESSED(2)) {
+			base = meter_total_pulses();
+			state = 1;
+		}
+	} else if (state == 1) {
+		uint32_t n = meter_total_pulses() - base; /* updates once per second */
+
+		snprintf(big, sizeof(big), "%8u", (unsigned)n);
+		snprintf(small_, sizeof(small_), "rUN ");
+		if (PRESSED(2)) {
+			result = meter_total_pulses() - base;
+			state = 2;
+			show_server = false;
+			BEEP_MENU();
+		}
+	} else {
+		if (PRESSED(3)) {
+			show_server = !show_server;
+		}
+		if (show_server) {
+			snprintf(big, sizeof(big), "PS  %4d", clampi(meter_tariff1.pm, 0, 9999));
+			snprintf(small_, sizeof(small_), "HOST");
+		} else {
+			snprintf(big, sizeof(big), "PM  %4u", (unsigned)MIN((result + 5) / 10, 9999));
+			snprintf(small_, sizeof(small_), "CAL ");
+		}
+		if (PRESSED(4)) {
+			state = 0;
+		}
+	}
+
+	if (PRESSED(5)) {
+		state = 0;
+		goto_page(P_MENU);
 	}
 }
 
@@ -471,6 +692,9 @@ static void ui_thread(void *a, void *b, void *c)
 		case P_FARE1:   page_fare1(); break;
 		case P_FARE4:   page_fare4(); break;
 		case P_OFF:     page_off(); break;
+		case P_INFO:    page_info(); break;
+		case P_REPORT:  page_report(); break;
+		case P_CAL:     page_cal(); break;
 		}
 
 		display_set(big, small_, colon);

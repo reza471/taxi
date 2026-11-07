@@ -21,6 +21,7 @@
 #include "tariff.h"
 #include "postq.h"
 #include "trip_store.h"
+#include "report.h"
 #include "wdog.h"
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
@@ -44,6 +45,7 @@ static volatile bool connect_pending;
 static volatile bool tariff_requested = true;
 static volatile int64_t tariff_try_after; /* ms uptime, no tariff request before this */
 static char serial[13];
+static volatile int server_state;
 
 /* ---------------- post queue: see postq.c ---------------- */
 static K_SEM_DEFINE(q_wake, 0, 1);
@@ -51,6 +53,11 @@ static K_SEM_DEFINE(q_wake, 0, 1);
 /* ---------------- reserve scan ---------------- */
 static volatile bool reserve_scan_req;
 static volatile bool reserve_found;
+
+int net_server_state(void)
+{
+	return server_state;
+}
 
 const char *net_serial(void)
 {
@@ -317,6 +324,7 @@ static int https_request(enum http_method method, const char *path, char *body, 
 
 	if (zsock_getaddrinfo(SERVER_HOST, SERVER_PORT, &hints, &res) != 0 || !res) {
 		LOG_WRN("server DNS failed");
+		server_state = -1;
 		return -EHOSTUNREACH;
 	}
 
@@ -345,6 +353,7 @@ static int https_request(enum http_method method, const char *path, char *body, 
 		ret = -errno;
 		zsock_close(sock);
 		LOG_WRN("connect failed: %d", ret);
+		server_state = -1;
 		return ret;
 	}
 
@@ -371,8 +380,10 @@ static int https_request(enum http_method method, const char *path, char *body, 
 	zsock_close(sock);
 	if (ret < 0) {
 		LOG_WRN("http request failed: %d", ret);
+		server_state = -1;
 		return ret;
 	}
+	server_state = 1;
 	return ctx.status;
 }
 
@@ -449,8 +460,9 @@ static void net_thread(void *a, void *b, void *c)
 
 		/* 1. save queue changes (flash write can stall other threads for a few ms,
 		 *    so do it while the driver is not pressing keys) */
-		if (postq_dirty() && key_rest_ms() >= FLASH_WRITE_IDLE_MS) {
+		if ((postq_dirty() || report_dirty()) && key_rest_ms() >= FLASH_WRITE_IDLE_MS) {
 			postq_flush();
+			report_flush();
 		}
 
 		/* 1b. running trip -> flash, so a power loss does not lose the fare */
@@ -469,6 +481,7 @@ static void net_thread(void *a, void *b, void *c)
 			/* trip ended: save the trip record first, then clear the running trip.
 			 * Done at once, even while keys are used, so an ended trip never comes back. */
 			postq_flush();
+			report_flush();
 			trip_state_t st;
 
 			meter_export(&st);

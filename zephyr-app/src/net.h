@@ -21,4 +21,6 @@ bool net_reserve_found(void);
 void net_reserve_reset(void);
 
 const char *net_serial(void);
+/* Last HTTPS result: 1 = server answered, -1 = failed, 0 = not tried yet. */
+int net_server_state(void);
 #endif

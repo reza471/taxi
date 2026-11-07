@@ -18,5 +18,6 @@ target_sources(app PRIVATE
 	src/net.c
 	src/postq.c
 	src/trip_store.c
+	src/report.c
 	src/wdog.c
 )

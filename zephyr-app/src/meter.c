@@ -32,6 +32,7 @@ static fare_ch_t ch[4];
 static const fare_tariff_t *tar[4] = {&meter_tariff1, &meter_tariff4, &meter_tariff4, &meter_tariff4};
 static uint32_t total_pulses;
 static char start_hhmm[4][8];
+static volatile int live_speed;
 
 static void meter_thread(void *a, void *b, void *c)
 {
@@ -45,6 +46,10 @@ static void meter_thread(void *a, void *b, void *c)
 
 		uint32_t pulses = pulse_take();
 		int hour = clock_hour_or_unset();
+
+		if (meter_tariff1.pm > 0) {
+			live_speed = (int)(((int64_t)pulses * 36) / meter_tariff1.pm);
+		}
 
 		k_mutex_lock(&lock, K_FOREVER);
 		total_pulses += pulses;
@@ -171,4 +176,9 @@ void meter_import(const trip_state_t *in)
 		start_hhmm[i][sizeof(start_hhmm[i]) - 1] = '\0';
 	}
 	k_mutex_unlock(&lock);
+}
+
+int meter_speed_kmh(void)
+{
+	return live_speed;
 }

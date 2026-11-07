@@ -48,6 +48,7 @@ void meter_export(trip_state_t *out);  /* sealed snapshot of all channels */
 void meter_import(const trip_state_t *in);
 bool meter_any_active(void);
 uint32_t meter_total_pulses(void);
+int meter_speed_kmh(void); /* live speed, also when no trip is running */
 void meter_clear_total(void);
 
 /* Implemented outside (network layer). Weak stubs live in main.c for now. */

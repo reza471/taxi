@@ -13,6 +13,7 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 | display (HT16K33 remap, dp support, WiFi LEDs) | done, **not tested on hardware** |
 | pages: main, menu, single meter, 4-channel, pulse, off | done, **not tested on hardware** |
 | samar / reserve pages | done, **not tested on hardware** |
+| INFO, REPORT (today + last 10 trips), CAL (PM measure), error codes E-403 / E-001, speed on main page | done, host tested (report), text fit checked by `tests/lint_text.py` |
 | WiFi (STA), NTP clock (ntp.day.ir, +03:30), tariff download (JSON), trip/service upload queue (10 slots) | done, **not tested** (builds only) |
 | settings in flash (`storage` partition, Zephyr settings/NVS) | done, **not tested** |
 

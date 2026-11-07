@@ -43,3 +43,13 @@ int clock_hour_or_unset(void)
 	clock_get_hm(&h, &m);
 	return h;
 }
+
+int32_t clock_day(void)
+{
+	if (!is_set) {
+		return -1;
+	}
+	int64_t now = base_epoch_s + (k_uptime_get() / 1000 - uptime_base_s) + tz_offset;
+
+	return (int32_t)(now / 86400);
+}

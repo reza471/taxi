@@ -42,5 +42,7 @@ bool clock_is_set(void);
 void clock_get_hm(int *h, int *m);
 /* Hour for the fare engine: -1 when the clock was never set. */
 int clock_hour_or_unset(void);
+/* Local calendar day number (days since 1970), -1 when the clock was never set. */
+int32_t clock_day(void);
 
 #endif

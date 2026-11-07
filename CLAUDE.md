@@ -20,9 +20,104 @@ Language note: code comments and some names are Persian/Finglish. See the glossa
 
 ## Zephyr rewrite (`zephyr-app/`, branch `claude/zephyr-rewrite`)
 
-A rewrite for Zephyr v4.2 (ESP32 DevKitC) lives in `zephyr-app/`. See `zephyr-app/README.md` for status, build steps and risks.
-The Arduino code in `src/` is still the reference for behavior. The Zephyr fare engine (`zephyr-app/core/fare_engine.c`) fixes
-known issues 1-5 below and has host tests. Do not edit `src/` for the rewrite.
+A full rewrite for **Zephyr v4.2, ESP32 DevKitC** (`esp32_devkitc/esp32/procpu`, SDK 0.17.0) lives in `zephyr-app/`.
+The Arduino code in `src/` stays as the behavior reference. Do not edit `src/` for the rewrite.
+Status: builds without warnings and has host tests. **Not tested on real hardware yet.**
+Details, risks and the reliability table: `zephyr-app/README.md`.
+
+### Build and test
+
+```
+# one time: west workspace, SDK, WiFi radio blobs (see zephyr-app/README.md)
+export ZEPHYR_BASE=<ws>/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR=<sdk>
+west build -b esp32_devkitc/esp32/procpu zephyr-app          # firmware
+gcc -O1 -fsanitize=address,undefined -o /tmp/tf zephyr-app/core/fare_engine.c zephyr-app/tests/test_fare.c && /tmp/tf   # fare engine
+zephyr-app/tests/native/run.sh                               # queue, flash, trip, report, tariff JSON (native_sim)
+python3 zephyr-app/tests/lint_text.py zephyr-app/src/ui.c     # every UI text fits the 7-seg and is readable
+```
+
+Run all four after any change. The native test runs the same binary several times on one simulated flash file
+(= several power cycles). If you add a test that needs a reboot, add a new `phase` case in `tests/native/src/main.c`.
+
+### Code map (`zephyr-app/`)
+
+| File | Role |
+|---|---|
+| `core/fare_engine.c/.h` | Pure C fare math, integer only (micro-Rial). No OS calls. Host tested |
+| `src/main.c` | Boot order, fatal-error handler (reboots), restores a running trip |
+| `src/meter.c/.h` | `meter` thread (1 s tick), channels, tariffs, live speed, export/import of trips |
+| `src/pulse.c` | GPIO32 interrupt counter with a 100 us glitch filter |
+| `src/keys.c` | 10 ms scan, 30 ms debounce, edge flags, hold/rest time |
+| `src/display.c` | HT16K33 driver, font, digit remap, dp, WiFi LEDs; redraws at once when text changes |
+| `src/ui.c` | All pages and menus (20 ms loop, never blocks) |
+| `src/net.c` | `net` thread: WiFi, NTP, tariff GET, upload, checkpoint of running trip |
+| `src/postq.c` | FIFO upload queue (16 records) saved in flash |
+| `src/trip_store.c` | Running trip saved every 10 s, restored after power loss |
+| `src/report.c` | Today total/count and last 10 trips, saved in flash |
+| `src/persist.c`, `src/tariff.c` | Settings in flash, server JSON -> tariffs |
+| `src/clock.c`, `src/beep.c`, `src/wdog.c` | Clock (NTP + uptime), software-tone buzzer, task watchdog + reset cause |
+| `boards/esp32_devkitc_procpu.overlay` | Pin map (same GPIOs as the Arduino version) |
+| `tests/` | `test_fare.c` (gcc), `native/` (native_sim), `lint_text.py` |
+
+Threads: `keys` 10 ms (prio 6), `meter` 1 s (5), `ui` 20 ms (7), `display` on change / 250 ms (8), `net` 300 ms (9), `beep` (12).
+All five important threads feed the task watchdog. Flash is written only by the `net` thread, and only when no key
+was used for 0.5 s (a flash write can stall the system for a few ms).
+
+### Fare rules (decided with the owner, differ from the Arduino code)
+
+- Distance is always charged (after the free distance). Waiting time is charged only below `Max_stop_km` (after the free time).
+- Night has its own prices: `Percent_night` applies to start fare, distance and waiting (no hard-coded 10 %).
+  Night is checked **every second**: rates change live if night starts or ends during a trip. If the clock was never set it is **day**.
+- Speed = pulses per second * 36 / PM. Distance is shown as km with one decimal (`1.2`).
+- Server fields at trip end: `traffic_price` = waiting cost, `trip_price` = total - traffic (start fare + distance),
+  `night_price` = the part of `trip_price` charged at night rates (full amount), `total_price`. Real `avg_speed`, `max_speed`,
+  distance, duration, waiting seconds. `traffic_distance` is still 0.
+
+### Screens on the 12 digits (big field 8 digits, small field 4 digits)
+
+A `.` in a text lights the dp of the digit before it and uses no digit (`1.2` = 2 digits). Letters **K Q V W X** are not readable
+on 7 segments (V looks like U, X like H): never use them. `R` is only kept in the old labels `SAMR`, `TARF`, `SR-`.
+`tests/lint_text.py` checks this for every text in `ui.c`.
+
+**Main** (big `--------`, small = clock `1305` with a blinking colon, `----` if the clock is not set)
+
+| Key | Action |
+|---|---|
+| K1 | 4-channel meter (needs `korsi`) |
+| K2 | pulse counter page |
+| K3 | press: small field clock <-> speed. Hold 10 s: reset WiFi to `Rad` and reboot |
+| K4 | single meter (needs `darbast`) |
+| K5 | hold 3 s then release: MENU. Hold 5 s: OFF |
+
+Errors (big field, with one long low beep): `E-403` = license expired (stays on the main page until the server accepts again),
+`E-001` = that meter mode is switched off in the tariff. Menu and OFF still work when expired.
+
+**MENU** has two pages. K1 switches the page at once (small shows `P-1` / `P-2`). For the other keys: press once = name, press again = enter. K5 = back.
+
+| Page | K2 | K3 | K4 |
+|---|---|---|---|
+| 1 | `SAMR` service numbers | `NOBT` queue (looks for AP `Usefi`) | `TARF` reload tariff |
+| 2 | `INFO` | `rEPT` report | `CAL ` PM measure |
+
+**INFO** (K2 next, K3 previous, K5 back): `NET  ON`/`NET OFF`, `HOST UP`/`HOST BAD`/`HOST ---` (last HTTPS result),
+`PEND  n` (records waiting to be sent), serial (first 8 hex chars big + last 4 small), `SOFT 0.1`, `TIME SET`/`TIME ---`. Small field shows `n-6`.
+
+**REPORT** (K2 next, K3 previous, K5 back): total of today in Toman (small `SUM `), number of trips today (`CNT `),
+then the last 10 trips newest first (big = fare in Toman, small = start time `HHMM`). "Today" = local calendar day, needs the clock.
+
+**CAL**: drive exactly 100 m. K2 start, K2 stop. Shows `PM` = pulses / 10. K3 switches to the PM of the server tariff (`PS`). K4 = again.
+It only **measures**: the tariff PM comes from the server, so tell the office the number.
+
+**Trip screens**: single meter (K2 cycles clock / speed / km / waiting minutes, K3 pause, K4 twice = end),
+4 channels (K1..K4), SAMR (K1 next, K2 previous, K3 select, K5 end), NOBT, pulse page, OFF.
+
+### Reliability (all in `zephyr-app/README.md`, summary)
+
+- Upload queue is a FIFO in flash: oldest first, back-off 5 s ... 2 min, survives power loss. Full queue drops old start/service records, never trip ends.
+- A running trip is saved every 10 s and resumes after a power loss (time without power is not counted). An ended trip is cleared at once.
+- Task watchdog + hardware watchdog + reboot on fatal error. Reset cause and stack use of every thread are in the log.
+- Known open points: no TLS certificate check, a duplicate upload is possible after a power loss in a few-ms window,
+  DRAM is 85 % used (stacks and net buffers are in DRAM1), key-to-screen latency (expected 60-80 ms) is not measured on hardware.
 
 ## Source map (`src/`)
 

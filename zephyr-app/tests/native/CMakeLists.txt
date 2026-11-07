@@ -11,5 +11,6 @@ target_sources(app PRIVATE
 	${APP}/src/persist.c
 	${APP}/src/tariff.c
 	${APP}/src/trip_store.c
+	${APP}/src/report.c
 	${APP}/core/fare_engine.c
 )
