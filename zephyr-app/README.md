@@ -140,6 +140,20 @@ Notes: K1 is on GPIO34 (input only, no internal pull-up), it needs an external p
 `pip install west` can fail building `docopt`; `setup.sh` works around it (docopt-ng, then west without dependencies).
 If `github.com/.../raw` is blocked, `setup.sh` downloads the blobs from `raw.githubusercontent.com`.
 
+## Test server on your own PC
+
+`tools/mock-server/` (Python, Windows scripts included): tariff and trip server with a web page, scenarios for every kind of
+failure, OTA file serving and an optional NTP server. The firmware address is a Kconfig option
+(`-DCONFIG_TAXI_SERVER_HOST=\"<ip>\" -DCONFIG_TAXI_SERVER_PORT=<port>`, default `node.raxitaxi.ir:443`). See its `README.md`.
+
+## TLS (important)
+
+The meter must offer the cipher suites that servers use today. The first version only offered static RSA + AES-CBC and sent no SNI;
+5 of 7 typical server setups refused it. `prj.conf` now enables ECDHE (RSA and ECDSA), AES-GCM, SHA-384/512, P-256/P-384/X25519
+and SNI. `tests/tls/check_tls.sh` builds a client with the real firmware settings and runs it against openssl servers
+(`BUILD_DIR=<firmware build> MBEDTLS_DIR=<ws>/modules/crypto/mbedtls tests/tls/check_tls.sh`). A server that only speaks TLS 1.3 is still not
+possible (the meter uses TLS 1.2 only).
+
 ## Host tests
 
 Fare engine (plain gcc):

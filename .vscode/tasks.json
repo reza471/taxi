@@ -1,0 +1,24 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Mock server: start (Windows)",
+			"type": "shell",
+			"command": "powershell -ExecutionPolicy Bypass -File zephyr-app/tools/mock-server/start.ps1 -Ip ${input:serverIp} -Port ${input:serverPort}",
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Mock server: tests",
+			"type": "shell",
+			"command": "python -m unittest discover -s tests -v",
+			"options": { "cwd": "${workspaceFolder}/zephyr-app/tools/mock-server" },
+			"problemMatcher": []
+		}
+	],
+	"inputs": [
+		{ "id": "serverIp", "type": "promptString", "description": "Your static IP (for the certificate and the hints)", "default": "127.0.0.1" },
+		{ "id": "serverPort", "type": "promptString", "description": "The open TCP port", "default": "8443" }
+	]
+}
