@@ -8,3 +8,8 @@
 *.pem
 *.key
 taxi_ota_key*
+
+# mock server: local state (admin token, certificate, firmware files), virtual environment
+zephyr-app/tools/mock-server/data/
+zephyr-app/tools/mock-server/.venv/
+__pycache__/

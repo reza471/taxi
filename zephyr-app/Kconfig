@@ -15,4 +15,22 @@ config TAXI_OTA
 	  (talk to the server) before it is confirmed. Without confirmation the old image comes back.
 	  Needs a sysbuild build with MCUboot (see zephyr-app/README.md).
 
+config TAXI_SERVER_HOST
+	string "Server host name or IP address"
+	default "node.raxitaxi.ir"
+	help
+	  The tariff / trip server. For a test on your own PC put its IP here, for example
+	  west build ... -- -DCONFIG_TAXI_SERVER_HOST=\"203.0.113.7\" -DCONFIG_TAXI_SERVER_PORT=8443
+
+config TAXI_SERVER_PORT
+	int "Server HTTPS port"
+	default 443
+	range 1 65535
+
+config TAXI_NTP_HOST
+	string "NTP server (host name or IP)"
+	default "ntp.day.ir"
+	help
+	  The mock server can also answer NTP (UDP 123) for tests on a local network.
+
 source "Kconfig.zephyr"

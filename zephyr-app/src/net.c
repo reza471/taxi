@@ -28,10 +28,10 @@
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
 
-#define SERVER_HOST "node.raxitaxi.ir"
-#define SERVER_PORT "443"
+#define SERVER_HOST CONFIG_TAXI_SERVER_HOST /* Kconfig: default node.raxitaxi.ir */
+#define SERVER_PORT CONFIG_TAXI_SERVER_PORT /* Kconfig: default 443 */
 #define TARIFF_PATH "/api/taxi/TaxiFare?driver_type=1&serial="
-#define NTP_SERVER "ntp.day.ir"
+#define NTP_SERVER CONFIG_TAXI_NTP_HOST /* Kconfig: default ntp.day.ir */
 #define TZ_OFFSET_S 12600 /* Iran, +03:30, no DST */
 
 #define IDLE_BEFORE_SEND_MS 3000 /* send only when no key was used for 3 s */
@@ -456,7 +456,7 @@ static int https_do(enum http_method method, const char *host, uint16_t port, co
 
 static int https_request(enum http_method method, const char *path, char *body, size_t body_size)
 {
-	return https_do(method, SERVER_HOST, 443, path, body, body_size, NULL, NULL,
+	return https_do(method, SERVER_HOST, SERVER_PORT, path, body, body_size, NULL, NULL,
 			10 * MSEC_PER_SEC, true);
 }
 
