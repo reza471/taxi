@@ -11,10 +11,11 @@
 #include "meter.h"
 #include "ui.h"
 #include "net.h"
+#include "wdog.h"
 
 LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 
-#define UI_PERIOD_MS 50
+#define UI_PERIOD_MS 20
 #define BEEP_MENU() beep(4000, 100)
 #define BASE_FARE_SHOW_MS 2000
 #define BLINK_MS 4000
@@ -45,6 +46,11 @@ static void show_clock(void)
 {
 	int h, m;
 
+	if (!clock_is_set()) {
+		snprintf(small_, sizeof(small_), "----");
+		colon = false;
+		return;
+	}
 	clock_get_hm(&h, &m);
 	snprintf(small_, sizeof(small_), "%02d%02d", h, m);
 	colon = true;
@@ -446,10 +452,9 @@ static void page_fare4(void)
 /* ---------------- thread ---------------- */
 static void update_backlight(void)
 {
-	int h, m;
-
-	clock_get_hm(&h, &m);
-	bool on = page != P_OFF && fare_is_night(&meter_tariff1, h);
+	/* backlight on at night; also on while the clock is unknown (easier to read) */
+	bool on = page != P_OFF &&
+		  (!clock_is_set() || fare_is_night(&meter_tariff1, clock_hour_or_unset()));
 
 	gpio_pin_set_dt(&backlight, on);
 }
@@ -457,12 +462,14 @@ static void update_backlight(void)
 static void ui_thread(void *a, void *b, void *c)
 {
 	int64_t next = k_uptime_get();
+	int wd = wdog_add(2000);
 
 	if (gpio_is_ready_dt(&backlight)) {
 		gpio_pin_configure_dt(&backlight, GPIO_OUTPUT_INACTIVE);
 	}
 
 	while (1) {
+		wdog_feed(wd);
 		next += UI_PERIOD_MS;
 		now = k_uptime_get();
 		key_poll(&k);

@@ -1,5 +1,6 @@
 #include "meter.h"
 #include "hw.h"
+#include "wdog.h"
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -33,15 +34,15 @@ static uint32_t total_pulses;
 static void meter_thread(void *a, void *b, void *c)
 {
 	int64_t next = k_uptime_get();
+	int wd = wdog_add(4000);
 
 	while (1) {
 		next += 1000;
 		k_sleep(K_TIMEOUT_ABS_MS(next));
+		wdog_feed(wd);
 
 		uint32_t pulses = pulse_take();
-		int hour, minute;
-
-		clock_get_hm(&hour, &minute);
+		int hour = clock_hour_or_unset();
 
 		k_mutex_lock(&lock, K_FOREVER);
 		total_pulses += pulses;
@@ -71,9 +72,8 @@ void meter_set_config(const fare_tariff_t *t1, const fare_tariff_t *t4, const me
 
 void meter_start(int i, bool is4ch)
 {
-	int h, m;
+	int h = clock_hour_or_unset();
 
-	clock_get_hm(&h, &m);
 	k_mutex_lock(&lock, K_FOREVER);
 	tar[i] = (is4ch || i > 0) ? &meter_tariff4 : &meter_tariff1;
 	fare_start(&ch[i], tar[i], h);

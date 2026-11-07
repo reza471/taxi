@@ -16,6 +16,26 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 | WiFi (STA), NTP clock (ntp.day.ir, +03:30), tariff download (JSON), trip/service upload queue (10 slots) | done, **not tested** (builds only) |
 | settings in flash (`storage` partition, Zephyr settings/NVS) | done, **not tested** |
 
+## Reliability design
+
+| Topic | What the code does | Verified |
+|---|---|---|
+| Unsent trips | FIFO queue (16 records) saved in flash. Slot is written before the meta, flash is written only when no key was used for 0.5 s. After a successful send the queue is saved at once. | host test with simulated flash, 6 power cycles, ring wrap-around |
+| Order | Strictly oldest first (trip start before trip end). One failure stops the queue, retry with back-off 5 s ... 2 min. | host test |
+| Queue full | The oldest start/service record is dropped first. Trip ends (they carry the money) are kept. | host test |
+| Server down | Meter works fully offline. Records wait in flash for days. | design, host test |
+| Duplicate send | A power loss between "server said OK" and the flash write (a few ms) can send one record twice. Ask the server owner if the API is idempotent. | design |
+| Hang / crash | Task watchdog on the `keys`, `meter`, `ui`, `display`, `net` threads, plus the hardware watchdog as fallback. A fatal error reboots at once. The reset cause is logged at boot. | builds, **not tested on hardware** |
+| Stack overflow | Thread analyzer prints stack use of every thread in the log every 2 min. Read it on the first long run. | builds |
+| Flash wear | Tariff is written only if it changed. Queue writes are 1-2 small entries per record. | host test |
+| Clock not set | Day rates, display shows `----`, backlight stays on. Never charges the night rate by mistake. | host test |
+
+## Speed (key press to display)
+
+Key scan 10 ms, debounce 30 ms, UI loop 20 ms, display redraws at once when the text changes
+(I2C frame about 2 ms). Expected worst case 60-80 ms (old firmware: up to about 350 ms). **Not measured on hardware.**
+A flash write can stall the system for a few ms, so it is done only when no key is in use.
+
 ## Known risks (read before flashing)
 
 - **RAM**: fixed by `CONFIG_ESP32_REGION_1_NOINIT=y` (stacks, kernel heap and net buffers go to the free DRAM1 region).
@@ -70,8 +90,18 @@ Blobs: `west blobs fetch hal_espressif` (all chips are checked by the build, not
 Notes: K1 is on GPIO34 (input only, no internal pull-up), it needs an external pull-up.
 `pip install west` can fail building `docopt`; install `docopt-ng` and `pykwalify --no-deps` first.
 
-## Host tests (fare engine)
+## Host tests
+
+Fare engine (plain gcc):
 
 ```
-gcc -Wall -Wextra -O1 -o /tmp/test_fare core/fare_engine.c tests/test_fare.c && /tmp/test_fare
+gcc -Wall -Wextra -O1 -fsanitize=address,undefined -o /tmp/test_fare core/fare_engine.c tests/test_fare.c && /tmp/test_fare
+```
+
+Queue, flash persistence and tariff JSON (Zephyr `native_sim`, simulated flash, runs the binary
+several times = several power cycles):
+
+```
+export ZEPHYR_BASE=<zephyr dir>
+tests/native/run.sh
 ```

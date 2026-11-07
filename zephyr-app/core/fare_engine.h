@@ -49,7 +49,7 @@ typedef struct {
 	int32_t speed_kmh;       /* last speed */
 } fare_ch_t;
 
-/* True if the given local time is night. */
+/* True if the given local hour is night. hour < 0 means "clock not set" and is always day. */
 bool fare_is_night(const fare_tariff_t *t, int hour);
 
 /* Start a trip on a channel. */

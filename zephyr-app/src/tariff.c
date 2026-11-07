@@ -93,6 +93,8 @@ bool tariff_apply_json(char *json, size_t len)
 		return false;
 	}
 
+	persist_t before = persist;
+
 	fill_common(&persist.t1, &j);
 	persist.t1.pri_cost = j.pri_cost;
 	persist.t1.trip3_pulses = j.trip3;
@@ -127,7 +129,9 @@ bool tariff_apply_json(char *json, size_t len)
 	}
 
 	meter_set_config(&persist.t1, &persist.t4, &persist.cfg);
-	persist_save();
+	if (memcmp(&before, &persist, sizeof(persist)) != 0) {
+		persist_save(); /* only write flash when something really changed */
+	}
 	LOG_INF("tariff updated: PM=%d pri=%d pri2=%d services=%d", (int)j.PM, (int)j.pri_cost,
 		(int)j.pri2_cost, (int)persist.service_count);
 	return true;

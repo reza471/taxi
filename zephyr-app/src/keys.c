@@ -1,4 +1,5 @@
 #include "hw.h"
+#include "wdog.h"
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
@@ -22,8 +23,10 @@ static void scan_thread(void *a, void *b, void *c)
 	bool stable[KEY_COUNT] = {0};
 	uint8_t cnt[KEY_COUNT] = {0};
 	int64_t next = k_uptime_get();
+	int wd = wdog_add(1000);
 
 	while (1) {
+		wdog_feed(wd);
 		next += SCAN_MS;
 
 		bool any = false;

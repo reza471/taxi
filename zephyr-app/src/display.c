@@ -4,6 +4,7 @@
  * Same digit remap and buffer layout as the Arduino version.
  */
 #include "hw.h"
+#include "wdog.h"
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/i2c.h>
@@ -12,7 +13,8 @@
 LOG_MODULE_REGISTER(display, LOG_LEVEL_INF);
 
 #define HT16K33_ADDR 0x70
-#define FRAME_MS 100
+#define FRAME_MS 250 /* max wait: blink phase and colon change without new text */
+#define REINIT_MS 5000 /* resend the init commands (survives a display chip reset) */
 
 static const struct device *const i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 
@@ -118,6 +120,7 @@ static const uint8_t font[96] = {
 };
 
 static K_MUTEX_DEFINE(lock);
+static K_SEM_DEFINE(wake, 0, 1);
 static char text[12 + 1] = "            ";
 static uint8_t dp_mask[12]; /* dp requested by a '.' in the text */
 static bool colon_on;
@@ -151,18 +154,27 @@ void display_set(const char *big8, const char *small4, bool show_colon)
 	parse_field(big8, 8, c1, d1);
 	parse_field(small4, 4, c2, d2);
 
+	bool changed;
+
 	k_mutex_lock(&lock, K_FOREVER);
+	changed = memcmp(text, c1, 8) || memcmp(text + 8, c2, 4) || memcmp(dp_mask, d1, 8) ||
+		  memcmp(dp_mask + 8, d2, 4) || colon_on != show_colon;
 	memcpy(text, c1, 8);
 	memcpy(text + 8, c2, 4);
 	memcpy(dp_mask, d1, 8);
 	memcpy(dp_mask + 8, d2, 4);
 	colon_on = show_colon;
 	k_mutex_unlock(&lock);
+
+	if (changed) {
+		k_sem_give(&wake); /* redraw right now, do not wait for the next frame */
+	}
 }
 
 void display_set_wifi(bool connected)
 {
 	wifi_ok = connected;
+	k_sem_give(&wake);
 }
 
 /* logical index (0..7 big field, 8..11 small field) -> physical position */
@@ -214,13 +226,30 @@ static void build_frame(uint8_t buf[16], const char *txt, const uint8_t *dps, bo
 	}
 }
 
+static void display_hw_init(void)
+{
+	static const uint8_t cmds[] = {
+		0x21, /* oscillator on */
+		0x81, /* display on, no blink */
+		0xE0, /* brightness level 0 (0xE0..0xEF) */
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(cmds); i++) {
+		i2c_write(i2c_dev, &cmds[i], 1, HT16K33_ADDR);
+	}
+}
+
 static void display_thread(void *a, void *b, void *c)
 {
 	uint8_t frame[17]; /* address byte + 16 data bytes */
-	int64_t next = k_uptime_get();
+	int64_t last_init = k_uptime_get();
+	int errors = 0;
+	int wd = wdog_add(3000);
 
 	while (1) {
-		next += FRAME_MS;
+		/* wakes at once when the text changes, otherwise every FRAME_MS */
+		k_sem_take(&wake, K_MSEC(FRAME_MS));
+		wdog_feed(wd);
 
 		char txt[12];
 		uint8_t dps[12];
@@ -249,14 +278,25 @@ static void display_thread(void *a, void *b, void *c)
 			}
 		}
 
+		/* re-send the setup now and then, and after any I2C error */
+		if (errors >= 3 || k_uptime_get() - last_init >= REINIT_MS) {
+			display_hw_init();
+			last_init = k_uptime_get();
+			errors = 0;
+		}
+
 		frame[0] = 0x00; /* RAM start address */
 		int err = i2c_write(i2c_dev, frame, sizeof(frame), HT16K33_ADDR);
 
 		if (err) {
+			errors++;
 			LOG_WRN_ONCE("display i2c write failed: %d", err);
+		} else {
+			errors = 0;
 		}
 
-		k_sleep(K_TIMEOUT_ABS_MS(next));
+		/* never redraw faster than every 10 ms even if the text changes a lot */
+		k_sleep(K_MSEC(10));
 	}
 }
 
@@ -264,17 +304,9 @@ K_THREAD_DEFINE(display_tid, 2048, display_thread, NULL, NULL, NULL, 8, 0, 300);
 
 void display_init(void)
 {
-	static const uint8_t cmds[] = {
-		0x21, /* oscillator on */
-		0x81, /* display on, no blink */
-		0xE0, /* brightness level 0 (0xE0..0xEF) */
-	};
-
 	if (!device_is_ready(i2c_dev)) {
 		LOG_ERR("i2c0 not ready");
 		return;
 	}
-	for (size_t i = 0; i < ARRAY_SIZE(cmds); i++) {
-		i2c_write(i2c_dev, &cmds[i], 1, HT16K33_ADDR);
-	}
+	display_hw_init();
 }

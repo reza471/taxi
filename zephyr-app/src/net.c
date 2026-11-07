@@ -7,6 +7,7 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/settings/settings.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/wifi_mgmt.h>
@@ -18,6 +19,8 @@
 #include "meter.h"
 #include "persist.h"
 #include "tariff.h"
+#include "postq.h"
+#include "wdog.h"
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
 
@@ -27,8 +30,6 @@ LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
 #define NTP_SERVER "ntp.day.ir"
 #define TZ_OFFSET_S 12600 /* Iran, +03:30, no DST */
 
-#define QUEUE_LEN 10
-#define URL_MAX 384
 #define IDLE_BEFORE_SEND_MS 3000 /* send only when no key was used for 3 s */
 #define RESYNC_MS (10 * 60 * 1000)
 #define CONNECT_RETRY_MS 30000
@@ -43,9 +44,8 @@ static volatile bool tariff_requested = true;
 static volatile int64_t tariff_try_after; /* ms uptime, no tariff request before this */
 static char serial[13];
 
-/* ---------------- post queue ---------------- */
-static char queue[QUEUE_LEN][URL_MAX];
-static K_MUTEX_DEFINE(q_lock);
+/* ---------------- post queue: see postq.c ---------------- */
+static K_SEM_DEFINE(q_wake, 0, 1);
 
 /* ---------------- reserve scan ---------------- */
 static volatile bool reserve_scan_req;
@@ -90,22 +90,9 @@ void net_reserve_reset(void)
 /* ---------------- public helpers used by the UI ---------------- */
 bool net_post(const char *path_query)
 {
-	bool ok = false;
+	bool ok = postq_push(path_query);
 
-	k_mutex_lock(&q_lock, K_FOREVER);
-	for (int i = 0; i < QUEUE_LEN; i++) {
-		if (queue[i][0] == '\0') {
-			strncpy(queue[i], path_query, URL_MAX - 1);
-			queue[i][URL_MAX - 1] = '\0';
-			ok = true;
-			LOG_INF("queued in slot %d", i);
-			break;
-		}
-	}
-	k_mutex_unlock(&q_lock);
-	if (!ok) {
-		LOG_ERR("post queue full, dropped");
-	}
+	k_sem_give(&q_wake);
 	return ok;
 }
 
@@ -130,18 +117,26 @@ void trip_submit(int bt, const meter_snap_t *s, const char *start_hhmm)
 {
 	char url[URL_MAX];
 	int h, m;
+	/* keep every number short so the record always fits in the queue slot */
+	const int64_t cap = 999999999;
+	int64_t trip = MIN(s->trip_price, cap), traffic = MIN(s->traffic_price, cap);
+	int64_t night = MIN(s->night_price, cap), total = MIN(s->total_rial, cap);
 
 	clock_get_hm(&h, &m);
 	/* trip_price = route price, night_price = night part of it, traffic_price = waiting.
 	 * traffic_distance is not measured yet (0). */
-	snprintf(url, sizeof(url),
+	int n = snprintf(url, sizeof(url),
 		 "/api/taxi/SetTaxiEnd?driver_id=%s&serial=%s&bt_number=%d&start_time=%s"
 		 "&stop_time=%02d:%02d&trip_distance=%d&trip_duration=%d&traffic_distance=0"
 		 "&traffic_duration=%d&avg_speed=%d&max_speed=%d&trip_price=%lld"
 		 "&traffic_price=%lld&night_price=%lld&total_price=%lld",
 		 serial, serial, bt, start_hhmm, h, m, s->dist_m, s->duration_s, s->wait_s,
-		 s->avg_speed_kmh, s->max_speed_kmh, (long long)s->trip_price,
-		 (long long)s->traffic_price, (long long)s->night_price, (long long)s->total_rial);
+		 s->avg_speed_kmh, s->max_speed_kmh, (long long)trip, (long long)traffic,
+		 (long long)night, (long long)total);
+	if (n < 0 || n >= (int)sizeof(url)) {
+		LOG_ERR("trip record too long, NOT queued");
+		return;
+	}
 	net_post(url);
 }
 
@@ -336,6 +331,10 @@ static int https_request(enum http_method method, const char *path, char *body, 
 	 * and use TLS_PEER_VERIFY_REQUIRED + TLS_SEC_TAG_LIST for real security. */
 	int verify = TLS_PEER_VERIFY_NONE;
 
+	struct zsock_timeval tmo = {.tv_sec = 10, .tv_usec = 0};
+
+	zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
+	zsock_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
 	zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY, &verify, sizeof(verify));
 	zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME, SERVER_HOST, sizeof(SERVER_HOST));
 
@@ -400,41 +399,55 @@ static void tariff_fetch(void)
 	}
 }
 
-static void queue_send_one(void)
+/* Send the OLDEST record only (strict order). Returns true if the queue is empty or the
+ * record was accepted by the server. */
+static bool queue_send_head(void)
 {
-	static int idx;
 	char url[URL_MAX];
 
-	k_mutex_lock(&q_lock, K_FOREVER);
-	strncpy(url, queue[idx], sizeof(url));
-	k_mutex_unlock(&q_lock);
-
-	if (url[0] != '\0') {
-		int st = https_request(HTTP_POST, url, NULL, 0);
-
-		if (st == 200 || st == 301) {
-			k_mutex_lock(&q_lock, K_FOREVER);
-			queue[idx][0] = '\0';
-			k_mutex_unlock(&q_lock);
-			LOG_INF("sent slot %d (HTTP %d)", idx, st);
-		} else {
-			LOG_WRN("send failed slot %d: %d", idx, st);
-		}
+	if (!postq_peek(url, sizeof(url))) {
+		return true;
 	}
-	idx = (idx + 1) % QUEUE_LEN;
+
+	int st = https_request(HTTP_POST, url, NULL, 0);
+
+	if (st == 200 || st == 301) {
+		postq_pop();
+		postq_flush(); /* save at once: a power loss now must not send it twice */
+		LOG_INF("sent (HTTP %d), %d left", st, postq_count());
+		return true;
+	}
+	LOG_WRN("send failed: %d (record stays in the queue)", st);
+	return false;
 }
 
 /* ---------------- thread ---------------- */
+#define SEND_BACKOFF_MIN_MS 5000
+#define SEND_BACKOFF_MAX_MS 120000
+#define FLASH_WRITE_IDLE_MS 500 /* write flash only when no key was used for a moment */
+
 static void net_thread(void *a, void *b, void *c)
 {
 	int64_t last_connect = -CONNECT_RETRY_MS;
 	int64_t last_sync = 0;
 	int64_t last_scan = 0;
 	int64_t last_ntp_try = -5000;
+	int64_t send_after = 0;
+	int send_fails = 0;
 	bool synced = false;
+	int wd = wdog_add(150000); /* blocking TLS/DNS calls can take a while */
 
 	while (1) {
+		wdog_feed(wd);
+		/* wake up for a new record, or every 300 ms */
+		k_sem_take(&q_wake, K_MSEC(300));
 		int64_t now = k_uptime_get();
+
+		/* 1. save queue changes (flash write can stall other threads for a few ms,
+		 *    so do it while the driver is not pressing keys) */
+		if (postq_dirty() && key_rest_ms() >= FLASH_WRITE_IDLE_MS) {
+			postq_flush();
+		}
 
 		if (!connected) {
 			synced = false;
@@ -442,7 +455,6 @@ static void net_thread(void *a, void *b, void *c)
 				last_connect = now;
 				wifi_connect();
 			}
-			k_sleep(K_MSEC(500));
 			continue;
 		}
 
@@ -468,10 +480,18 @@ static void net_thread(void *a, void *b, void *c)
 			wifi_scan();
 		}
 
-		if (key_rest_ms() >= IDLE_BEFORE_SEND_MS) {
-			queue_send_one();
+		/* 2. upload, oldest first, only when idle; back off when the server fails */
+		if (postq_count() > 0 && now >= send_after && key_rest_ms() >= IDLE_BEFORE_SEND_MS) {
+			if (queue_send_head()) {
+				send_fails = 0;
+				send_after = 0; /* next record right away */
+			} else {
+				int64_t wait = SEND_BACKOFF_MIN_MS << MIN(send_fails, 5);
+
+				send_fails++;
+				send_after = now + MIN(wait, SEND_BACKOFF_MAX_MS);
+			}
 		}
-		k_sleep(K_MSEC(300));
 	}
 }
 

@@ -16,4 +16,6 @@ target_sources(app PRIVATE
 	src/persist.c
 	src/tariff.c
 	src/net.c
+	src/postq.c
+	src/wdog.c
 )

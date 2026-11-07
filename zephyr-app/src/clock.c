@@ -32,3 +32,14 @@ void clock_get_hm(int *h, int *m)
 	*h = (int)(day_s / 3600);
 	*m = (int)((day_s % 3600) / 60);
 }
+
+int clock_hour_or_unset(void)
+{
+	int h, m;
+
+	if (!is_set) {
+		return -1;
+	}
+	clock_get_hm(&h, &m);
+	return h;
+}

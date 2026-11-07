@@ -5,6 +5,9 @@
 
 bool fare_is_night(const fare_tariff_t *t, int hour)
 {
+	if (hour < 0 || hour > 23) {
+		return false; /* clock not set: use day rates, never charge more by mistake */
+	}
 	if (t->stop_night == t->start_night) {
 		return false; /* no night configured */
 	}

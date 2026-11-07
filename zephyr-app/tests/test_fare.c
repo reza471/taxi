@@ -22,6 +22,8 @@ static void test_night(void)
 	assert(!fare_is_night(&t, 21));
 	assert(fare_is_night(&t, 22));
 	assert(fare_is_night(&t, 3));
+	assert(!fare_is_night(&t, -1)); /* clock not set */
+	assert(!fare_is_night(&t, 24));
 	t.stop_night = t.start_night = 0;
 	assert(!fare_is_night(&t, 3));
 }

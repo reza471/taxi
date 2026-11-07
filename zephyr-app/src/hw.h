@@ -40,5 +40,7 @@ void beep(uint32_t freq_hz, uint32_t ms); /* non-blocking */
 void clock_set_epoch(int64_t epoch_s, int32_t tz_offset_s);
 bool clock_is_set(void);
 void clock_get_hm(int *h, int *m);
+/* Hour for the fare engine: -1 when the clock was never set. */
+int clock_hour_or_unset(void);
 
 #endif
