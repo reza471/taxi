@@ -8,9 +8,9 @@ struct tm timeinfo;
 
 const char *GetSettingURL = "https://node.raxitaxi.ir/api/taxi/TaxiFare?driver_type=1&serial=";
 const char *PostTripURL = "https://node.raxitaxi.ir/api/taxi/SetTaxiEnd";
-const char *PostTripStartURL = "https://node.raxitaxi.ir/api/taxi/SetTaxiStart?serial=08A6F7A6A30C&bt_number=";
-const char *PostTripStopURL = "https://node.raxitaxi.ir/api/taxi/SetTaxiEnd?serial=08A6F7A6A30C&bt_number=";
-const char *PostServiceURL = "https://node.raxitaxi.ir/api/taxi/StartService?"; // serviceNum=222&serial=123123123&start=1
+const char *PostTripStartURL = "https://node.raxitaxi.ir/api/taxi/SetTaxiStart?";
+const char *PostTripStopURL = "https://node.raxitaxi.ir/api/taxi/SetTaxiEnd?";
+const char *PostServiceURL = "https://node.raxitaxi.ir/api/taxi/StartService?";
 // const char *GetSettingURL = "http://192.168.0.122/api/taxi/TaxiFare?driver_type=1&serial=08A6F7A6A30C";
 // const char *PostTripURL = "http://192.168.0.122/api/taxi/SetTaxiEnd";
 // const char *PostTripStartURL = "http://192.168.0.122/api/taxi/SetTaxiStart?serial=08A6F7A6A30C&bt_number=";
@@ -25,11 +25,8 @@ const char *PostServiceURL = "https://node.raxitaxi.ir/api/taxi/StartService?"; 
 // const char *ssid = "TP-LINK_5EE9B8";
 // const char *password = "92519251**";
 
-// const char *ssid = "dd-wrt_vap";
-// const char *password = "73147314**iI";
-
-const char *ssid = "Rad";
-const char *password = "123456789";
+const char *ssid = "dd-wrt_vap";
+const char *password = "73147314**iI";
 
 // NTP server configuration
 const char *ntpServer = "ntp.day.ir";
@@ -59,7 +56,7 @@ void SetToQueue(String s);
 
 void Get_Time();
 
-void get_SettingData();
+//void get_SettingData(uint8_t);
 
 void NetWork_Init()
 {
@@ -67,11 +64,20 @@ void NetWork_Init()
     Serial.print("[WiFi] Connecting to ");
     Serial.println(ssid);
     Serial.println(WiFi.macAddress());
-    WiFi.begin(ssid, password);
+
+    if (mySetting.getWifi() == "")
+    {
+        mySetting.setWifi("Rad");
+        mySetting.setWifiPass("123456789");
+    }
+
+    WiFi.begin(mySetting.getWifi(), mySetting.getWifiPass());
 }
 
 void NetWork_Proc()
 {
+    String macStr;
+
     static unsigned long previousMillis = 0;
     unsigned long currentMillis = millis();
 
@@ -109,7 +115,13 @@ void NetWork_Proc()
         Serial.print("[WiFi] IP address: ");
         Serial.println(WiFi.localIP());
         Get_Time();
-        // get_SettingData();
+
+        macStr = WiFi.macAddress();
+        macStr.replace(":", "");
+        SERIAL_NUMBER = macStr;
+
+        Serial.println(SERIAL_NUMBER);
+        get_SettingData(0);
         return;
         break;
     default:
@@ -174,13 +186,13 @@ void Send_Trip_Data()
 
 void Start_Trip(uint32_t id)
 {
-    String TripPostData = String(PostTripStartURL) + id;
+    String TripPostData = String(PostTripStartURL) + "serial=" + String(SERIAL_NUMBER) + "&bt_number=" + id;
     SetToQueue(TripPostData);
 }
 
 void Stop_Trip(uint32_t id)
 {
-    String TripPostData = String(PostTripStopURL) + id;
+    String TripPostData = String(PostTripStopURL) + "serial=" + String(SERIAL_NUMBER) + "&bt_number=" + id;
     SetToQueue(TripPostData);
 }
 
@@ -192,14 +204,12 @@ void Send_Service_Data(uint8_t service_num, uint8_t start)
 
 String settingReading;
 
-void get_SettingData()
+void get_SettingData(uint8_t i)
 {
     if (WiFi.status() == WL_CONNECTED)
     {
         HTTPClient http;
-        String macStr = WiFi.macAddress();
-        macStr.replace(":", "");
-        http.begin(GetSettingURL+macStr); 
+        http.begin(GetSettingURL + SERIAL_NUMBER); // Replace `GetSettingURL` with your URL string
         int httpResponseCode = http.GET();
 
         if (httpResponseCode == 200) // HTTP OK
@@ -229,13 +239,21 @@ void get_SettingData()
 
             // Optionally, save the response to a global variable for later use
             settingReading = response;
-
+if(i)
+{
             beep(4000, 200);
             delay(500);
             beep(4000, 200);
+}
+            Authorized = 1;
         }
         else
         {
+            if (httpResponseCode == 403) // expire
+            {
+                Authorized = 0;
+            }
+
             Serial.print("HTTP GET Request failed with code: ");
             Serial.println(httpResponseCode);
         }
@@ -280,9 +298,6 @@ void Get_Time()
 
 void SetToQueue(String s)
 {
-    // Serial.print(GREEN);
-    //  Serial.println(s);
-    //  Serial.print(RESET);
 
     for (int i = 0; i < 10; i++)
     {
@@ -348,7 +363,7 @@ void Network_Send_Proc()
             // Serial.println(url);
             // Serial.print(RESET);
             // printf(url.c_str());
-            //printf("Http Request Sent.");
+            // printf("Http Request Sent.");
             http.begin(url);                      // Specify the URL
             int httpResponseCode = http.POST(""); // Send the POST request
 

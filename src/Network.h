@@ -15,7 +15,7 @@ extern "C"
     void NetWork_Proc();
     void Send_Trip_Data();
     void Send_Service_Data(uint8_t service_num, uint8_t start);
-    void get_SettingData();
+    void get_SettingData(uint8_t);
     void Start_Trip(uint32_t id);
     void Stop_Trip(uint32_t id);
     String getFormattedTime();

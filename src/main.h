@@ -76,6 +76,8 @@ extern int speed;
 
 extern uint8_t blink_500ms;
 
+extern uint8_t Authorized;
+
 void night_proc();
 void init_ch(char ch, uint8_t is4ch);
 void beep(int freq, int duration);

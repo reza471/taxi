@@ -107,6 +107,17 @@ void main_page()
     sprintf(DispStr1, "--------");
     sprintf(DispStr2, "%02u%02u", Hours, Min);
 
+    if (KeyB.K3.still_pressed && KeyB.Hold_Time > 10000)
+    {
+        mySetting.setWifi("Rad");
+        mySetting.setWifiPass("123456789");
+        mySetting.writeToFile();
+        ESP.restart();
+    }
+
+    if (!Authorized)
+        return;
+
     if (KeyB.K1.pressed && mySetting.getKorsi())
     {
         BuzzMenu();
@@ -216,7 +227,7 @@ void menu_page()
         sprintf(DispStr2, "TARF");
         if (i == 4)
         {
-            get_SettingData();
+            get_SettingData(1);
             Active_Page = main_bm;
         }
         i = 4;

@@ -29,6 +29,13 @@ private:
     int nobat;
     int taxi;
 
+    String wifi;
+    String wifiPass;
+
+    int trip3;
+    int Cost3_200;
+    int Cost3_stop;
+
     // Using a fixed-size array for service
     int service[10];      // Adjust size as needed
     int serviceCount = 0; // To track how many services are in the array
@@ -40,7 +47,8 @@ public:
           Cost_200(0), Cost_stop(0), Max_stop_km(0), free_trip(0), free_time(0),
           Percent_night(0), fraction(0), pri2_cost(0),
           Cost2_200(0), Cost2_stop(0), taxi(0), samar(0), darbast(0),
-          korsi(0), nobat(0)
+          korsi(0), nobat(0), wifi("Rad"), wifiPass("123456789"),
+          trip3(0), Cost3_200(0), Cost3_stop(0)
     {
         memset(service, 0, sizeof(service)); // Initialize service array
 
@@ -72,7 +80,14 @@ public:
     int getKorsi() const { return korsi; }
     int getNobat() const { return nobat; }
 
-    // Getter for the service array
+    String getWifi() const { return wifi; }
+    String getWifiPass() const { return wifiPass; }
+
+    int gettrip3() const { return trip3; }
+    int getCost3_200() const { return Cost3_200; }
+    int getCost3_stop() const { return Cost3_stop; }
+
+    //  Getter for the service array
     int getService(int i) { return service[i]; }
     int getServiceCount() { return serviceCount; }
 
@@ -96,6 +111,13 @@ public:
     void setDarbast(int value) { darbast = value; }
     void setKorsi(int value) { korsi = value; }
     void setNobat(int value) { nobat = value; }
+
+    void setWifi(const String &value) { wifi = value; }
+    void setWifiPass(const String &value) { wifiPass = value; }
+
+    void gettrip3(int value) { trip3 = value; }
+    void getCost3_200(int value) { Cost3_200 = value; }
+    void getCost3_stop(int value) { Cost3_stop = value; }
 
     // Write object data to LittleFS
     void writeToFile()
@@ -131,6 +153,13 @@ public:
         doc["darbast"] = darbast;
         doc["korsi"] = korsi;
         doc["nobat"] = nobat;
+
+        doc["trip3"] = trip3;
+        doc["Cost3_200"] = Cost3_200;
+        doc["Cost3_stop"] = Cost3_stop;
+
+        doc["wifi"] = wifi;
+        doc["wifiPass"] = wifiPass;
 
         // Write service array
         JsonArray serviceArray = doc.createNestedArray("service");
@@ -187,6 +216,15 @@ public:
         darbast = taxiFare["darbast"] | 0;
         korsi = taxiFare["korsi"] | 0;
         nobat = taxiFare["nobat"] | 0;
+
+        trip3 = taxiFare["trip3"] | 0;
+        Cost3_200 = taxiFare["Cost3_200"] | 0;
+        Cost3_stop = taxiFare["Cost3_stop"] | 0;
+
+        // wifi = taxiFare["wifi"] | "";
+        // wifiPass = taxiFare["wifiPass"] | "";
+        wifi = taxiFare["wifi"].as<const char *>();
+        wifiPass = taxiFare["wifiPass"].as<const char *>();
 
         // Parse the 'service' array
         JsonArray serviceArray = taxiFare["service"];
@@ -251,6 +289,15 @@ public:
         korsi = doc["korsi"];
         nobat = doc["nobat"];
 
+        trip3 = doc["trip3"];
+        Cost3_200 = doc["Cost3_200"];
+        Cost3_stop = doc["Cost3_stop"];
+
+        // wifi = doc["wifi"];
+        // wifiPass = doc["wifiPass"];
+        wifi = doc["wifi"].as<const char *>();
+        wifiPass = doc["wifiPass"].as<const char *>();
+
         // Read the 'service' array
         JsonArray serviceArray = doc["service"].as<JsonArray>();
         serviceCount = 0;
@@ -286,6 +333,11 @@ public:
         Serial.println("Darbast: " + String(darbast));
         Serial.println("Korsi: " + String(korsi));
         Serial.println("Nobat: " + String(nobat));
+        Serial.println("ssid: " + String(wifi));
+        Serial.println("wifipass: " + String(wifiPass));
+        Serial.println("trip3: " + String(trip3));
+        Serial.println("cost3_200: " + String(Cost3_200));
+        Serial.println("cost3_stop: " + String(Cost3_stop));
 
         // Print the 'service' array
         Serial.println("Service Array:");

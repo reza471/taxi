@@ -2,9 +2,12 @@
 #include "esp32/clk.h"
 #include "driver/pcnt.h"
 
+uint8_t Authorized = 1;
+uint8_t Trip3_Active = 0;
+
 uint8_t Net_Busy = false;
 
-String SERIAL_NUMBER = "08A6F7A6A30C";
+String SERIAL_NUMBER = "";
 
 int pulse_inputPin = 32;
 int Bk_OutputPin = 2;
@@ -49,6 +52,7 @@ long int freeSecond = 0;
 
 long int freepulse = 0;
 long int freeSecondpulse = 0;
+long int freepulse_Cost3 = 0;
 
 signed int kasri[4] = {0};
 bool IsFirst[4] = {false};
@@ -94,6 +98,8 @@ void setup()
   timerAlarmWrite(timer, 1000, true);          // 1 second (1,000,000 microseconds)
   timerAlarmEnable(timer);                     // Enable the alarm
 
+mySetting.readFromFile();
+
   freeTripPM = (mySetting.getFreeTrip()) * mySetting.getPM() / 10;
   freeSecond = mySetting.getFreeTime();
 
@@ -103,7 +109,6 @@ void setup()
   Display_Init();
   NetWork_Init();
 
-  mySetting.readFromFile();
 }
 
 void loop()
@@ -180,6 +185,7 @@ void init_ch(char ch, uint8_t is4ch)
 
   freepulse = 0;
   freeSecondpulse = 0;
+  freepulse_Cost3 = 0;
 }
 
 void night_proc()
@@ -190,6 +196,12 @@ void night_proc()
     x = (float)mySetting.getCost200() / (20 * mySetting.getPM()); // 20 X ppm10m  = 200m
     y = (float)mySetting.getCostStop() / 60;
     Pri_Cost = mySetting.getPriCost();
+
+    if (Trip3_Active)
+    {
+      x = (float)mySetting.getCost3_200() / (20 * mySetting.getPM()); // 20 X ppm10m  = 200m
+      y = (float)mySetting.getCost3_stop() / 60;
+    }
   }
   else
   {
@@ -220,6 +232,7 @@ void processPulse()
   vpulse++;
   kpulse++;
   freepulse++;
+  freepulse_Cost3++;
 
   // Update km count
   if (kpulse >= (10 * PM))
@@ -249,6 +262,15 @@ void processPulse()
   else
   {
     freepulse--;
+  }
+
+  if (freepulse_Cost3 > mySetting.gettrip3() && mySetting.gettrip3() > 0)
+  {
+    Trip3_Active = 1;
+  }
+  else
+  {
+    Trip3_Active = 0;
   }
 }
 
