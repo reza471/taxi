@@ -28,7 +28,7 @@ Details, risks and the reliability table: `zephyr-app/README.md`.
 ### Build and test
 
 ```
-# one time: west workspace, SDK, WiFi radio blobs (see zephyr-app/README.md)
+# one time: zephyr-app/tools/setup.sh   (west workspace with MCUboot, SDK, WiFi radio blobs) then `source <ws>/env.sh`, `cd $ZEPHYR_BASE`
 export ZEPHYR_BASE=<ws>/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR=<sdk>
 west build -b esp32_devkitc/esp32/procpu zephyr-app          # firmware
 gcc -O1 -fsanitize=address,undefined -o /tmp/tf zephyr-app/core/fare_engine.c zephyr-app/tests/test_fare.c && /tmp/tf   # fare engine
@@ -64,6 +64,8 @@ Run all of them after any change. The native test runs the same binary several t
 | `src/persist.c`, `src/tariff.c` | Settings in flash. `tariff.c` reads the server JSON with `json_lite` and checks every number against a range; on any problem it refuses the **whole** update and changes nothing (a price never comes from half-understood data). A bad WiFi name/password is ignored, the prices are still applied |
 | `src/clock.c`, `src/beep.c`, `src/wdog.c` | Clock (NTP + uptime), software-tone buzzer, task watchdog + reset cause |
 | `boards/esp32_devkitc_procpu.overlay` | Pin map (same GPIOs as the Arduino version) |
+| `tools/setup.sh` | One-command setup of west, Zephyr workspace (+ MCUboot), WiFi blobs, SDK. Idempotent. Does not create the OTA key |
+| `VERSION`, `Kconfig`, `sysbuild.conf`, `sysbuild.cmake` | App version, `TAXI_OTA` option, MCUboot settings (the MCUboot source itself is NOT in this repo: west fetches it, sysbuild builds it) |
 | `tests/` | `test_fare.c` (gcc), `native/` (native_sim), `lint_text.py` |
 
 Threads: `keys` 10 ms (prio 6), `meter` 1 s (5), `ui` 20 ms (7), `display` on change / 250 ms (8), `net` 300 ms (9), `beep` (12).

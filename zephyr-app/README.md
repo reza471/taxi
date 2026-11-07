@@ -119,21 +119,26 @@ INFO page 7 shows the state: `UPD ---`, `UPD  42` (percent), `UPD DONE` (waiting
 - Price split for the server: traffic = waiting cost; trip = total - traffic (route: start fare + distance);
   night = the part of the route price charged at night rates (full amount, included in trip).
 
-## Build
+## Setup and build
+
+One command prepares a new computer (west, a Zephyr v4.2.0 workspace with only the modules the app needs **including MCUboot**,
+the ESP32 WiFi blobs with SHA256 check, the Zephyr SDK). It is safe to run again and it does **not** create the OTA signing key:
 
 ```
-pip3 install west   # needs docopt-ng, see notes below
-west init -m https://github.com/zephyrproject-rtos/zephyr --mr v4.2.0 zp
-cd zp && west update hal_espressif mbedtls cmsis_6 picolibc littlefs
-export ZEPHYR_BASE=$PWD/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR=<sdk dir>
-west build -b esp32_devkitc/esp32/procpu <this folder>
+zephyr-app/tools/setup.sh          # workspace ~/zephyr-ws, SDK ~/zephyr-sdk (change: ZWS=... ZSDK=... )
+source ~/zephyr-ws/env.sh
+cd "$ZEPHYR_BASE"                  # west must run inside the workspace
+west build -b esp32_devkitc/esp32/procpu <repo>/zephyr-app     # plain build (OTA off)
 west flash
 ```
 
-Blobs: `west blobs fetch hal_espressif` (all chips are checked by the build, not only ESP32).
+Needs: git, python3 (3.10+), pip3, cmake, ninja, gcc, curl, xz.
+MCUboot is **not** in this repository: `setup.sh` (west) downloads its source into the workspace and `--sysbuild` builds it.
+What this repo keeps are only its settings (`sysbuild.conf`, `sysbuild.cmake`, `Kconfig`, `VERSION`). The OTA build is in the OTA section.
 
 Notes: K1 is on GPIO34 (input only, no internal pull-up), it needs an external pull-up.
-`pip install west` can fail building `docopt`; install `docopt-ng` and `pykwalify --no-deps` first.
+`pip install west` can fail building `docopt`; `setup.sh` works around it (docopt-ng, then west without dependencies).
+If `github.com/.../raw` is blocked, `setup.sh` downloads the blobs from `raw.githubusercontent.com`.
 
 ## Host tests
 
