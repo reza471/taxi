@@ -34,6 +34,7 @@ west build -b esp32_devkitc/esp32/procpu zephyr-app          # firmware
 gcc -O1 -fsanitize=address,undefined -o /tmp/tf zephyr-app/core/fare_engine.c zephyr-app/tests/test_fare.c && /tmp/tf   # fare engine
 gcc -O1 -fsanitize=address,undefined -o /tmp/tj zephyr-app/core/json_lite.c zephyr-app/tests/test_json.c -lm && /tmp/tj   # JSON reader + fuzz
 gcc -O1 -fsanitize=address,undefined -o /tmp/tu zephyr-app/core/urlq.c zephyr-app/tests/test_urlq.c && /tmp/tu   # request builder
+gcc -O1 -fsanitize=address,undefined -o /tmp/to zephyr-app/core/ota_logic.c zephyr-app/tests/test_ota.c && /tmp/to   # OTA version/header/url logic
 zephyr-app/tests/native/run.sh                               # queue, flash, trip, report, tariff JSON (native_sim)
 python3 zephyr-app/tests/lint_text.py zephyr-app/src/ui.c     # every UI text fits the 7-seg and is readable
 ```
@@ -48,6 +49,7 @@ Run all of them after any change. The native test runs the same binary several t
 | `core/fare_engine.c/.h` | Pure C fare math, integer only (micro-Rial). No OS calls. Host tested |
 | `core/json_lite.c/.h` | Own tolerant JSON reader (no heap): any key order, nesting, `true`/`1.5`/`"46"` numbers, escapes, depth and size limits. Host tested + 300k-case fuzz |
 | `core/urlq.c/.h` | Safe builder for `path?key=value` requests: percent-encoding, overflow detection |
+| `core/ota_logic.c/.h` | OTA pure logic: version compare, MCUboot header check, https URL check, "download this offer?" |
 | `src/main.c` | Boot order, fatal-error handler (reboots), restores a running trip |
 | `src/meter.c/.h` | `meter` thread (1 s tick), channels, tariffs, live speed, export/import of trips |
 | `src/pulse.c` | GPIO32 interrupt counter with a 100 us glitch filter |
@@ -58,6 +60,7 @@ Run all of them after any change. The native test runs the same binary several t
 | `src/postq.c` | FIFO upload queue (16 records) saved in flash |
 | `src/trip_store.c` | Running trip saved every 10 s, restored after power loss |
 | `src/report.c` | Today total/count and last 10 trips, saved in flash |
+| `src/ota.c` | OTA state machine (download into slot 1, request upgrade, reboot when idle, confirm or roll back). Compiled only when MCUboot is in the build (`CONFIG_TAXI_OTA`) |
 | `src/persist.c`, `src/tariff.c` | Settings in flash. `tariff.c` reads the server JSON with `json_lite` and checks every number against a range; on any problem it refuses the **whole** update and changes nothing (a price never comes from half-understood data). A bad WiFi name/password is ignored, the prices are still applied |
 | `src/clock.c`, `src/beep.c`, `src/wdog.c` | Clock (NTP + uptime), software-tone buzzer, task watchdog + reset cause |
 | `boards/esp32_devkitc_procpu.overlay` | Pin map (same GPIOs as the Arduino version) |
@@ -114,6 +117,15 @@ It only **measures**: the tariff PM comes from the server, so tell the office th
 
 **Trip screens**: single meter (K2 cycles clock / speed / km / waiting minutes, K3 pause, K4 twice = end),
 4 channels (K1..K4), SAMR (K1 next, K2 previous, K3 select, K5 end), NOBT, pulse page, OFF.
+
+### OTA (firmware update) - read `zephyr-app/README.md` before touching it
+
+- Needs a sysbuild build with MCUboot, swap mode, ECDSA P-256 signature: `west build --sysbuild ... -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"<your key>\"`.
+  Without MCUboot the app still builds and `ota.c` is a no-op (INFO shows `UPD  OFF`). `sysbuild.cmake` refuses to build without your own key.
+- The tariff JSON carries `fw_version` + `fw_url` (https). Download only when idle, stop at once on a key press, MCUboot checks the signature,
+  the new image confirms itself after reaching the server for 2 min, otherwise MCUboot swaps the old one back and that version is blocked.
+- The version number lives in `zephyr-app/VERSION` only (image header, INFO page, comparison).
+- **Never commit a private key** (`.gitignore` has `*.pem`). The swap/rollback is **not tested on hardware**.
 
 ### Reliability (all in `zephyr-app/README.md`, summary)
 

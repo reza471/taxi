@@ -18,6 +18,9 @@
 
 extern int stub_config_calls;
 extern int32_t stub_day;
+extern char stub_fw_ver[32];
+extern char stub_fw_url[256];
+extern int stub_fw_calls;
 
 static int phase = -1;
 
@@ -266,6 +269,37 @@ ZTEST(taxi, test_o_json_garbage)
 	zassert_false(try_tariff("{\"PM\":46,"));
 	zassert_false(try_tariff("null"));
 	zassert_false(try_tariff("{}"), "empty object (PM missing)");
+}
+
+ZTEST(taxi, test_p_firmware_offer)
+{
+	try_tariff("{" BASE ",\"fw_version\":\"0.2.0\",\"fw_url\":\"https://fw.example.ir/taxi-0.2.0.signed.bin\"}");
+	zassert_str_equal(stub_fw_ver, "0.2.0");
+	zassert_str_equal(stub_fw_url, "https://fw.example.ir/taxi-0.2.0.signed.bin");
+
+	/* no offer in the next tariff: the offer is withdrawn */
+	try_tariff("{" BASE "}");
+	zassert_str_equal(stub_fw_ver, "(none)");
+
+	/* only one of the two fields: no offer */
+	try_tariff("{" BASE ",\"fw_version\":\"0.2.0\"}");
+	zassert_str_equal(stub_fw_ver, "(none)");
+
+	/* a URL longer than the buffer is ignored, prices still apply */
+	char longj[600];
+	char url[300];
+
+	memset(url, 'a', sizeof(url) - 1);
+	url[sizeof(url) - 1] = '\0';
+	snprintf(longj, sizeof(longj), "{" BASE ",\"fw_version\":\"0.3.0\",\"fw_url\":\"https://x.ir/%s\"}", url);
+	zassert_true(try_tariff(longj));
+	zassert_str_equal(stub_fw_ver, "(none)");
+
+	/* a broken tariff must not touch the offer */
+	int calls = stub_fw_calls;
+
+	zassert_false(try_tariff("{\"PM\":0,\"fw_version\":\"9.9.9\",\"fw_url\":\"https://x.ir/a\"}"));
+	zassert_equal(stub_fw_calls, calls, "refused tariff must not start an update");
 }
 
 /* ---------- report helpers ---------- */

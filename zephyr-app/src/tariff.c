@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 #include "json_lite.h"
 #include "persist.h"
+#include "ota.h"
 
 LOG_MODULE_REGISTER(tariff, LOG_LEVEL_INF);
 
@@ -58,6 +59,9 @@ struct collect {
 	char ssid[WIFI_SSID_MAX];
 	char pass[WIFI_PASS_MAX];
 	bool have_ssid, have_pass, ssid_bad, pass_bad;
+	char fw_version[16];
+	char fw_url[JL_STR_MAX + 1];
+	bool have_fw_version, have_fw_url;
 };
 
 static void on_value(const char *path, int idx, const jl_val_t *val, void *user)
@@ -80,6 +84,20 @@ static void on_value(const char *path, int idx, const jl_val_t *val, void *user)
 		return;
 	}
 	if (idx >= 0) {
+		return;
+	}
+	if (strcmp(path, "fw_version") == 0 && val->type == JL_STR) {
+		if (strlen(val->str) < sizeof(c->fw_version)) {
+			memcpy(c->fw_version, val->str, strlen(val->str) + 1);
+			c->have_fw_version = true;
+		}
+		return;
+	}
+	if (strcmp(path, "fw_url") == 0 && val->type == JL_STR) {
+		if (!val->str_cut && strlen(val->str) < sizeof(c->fw_url)) {
+			memcpy(c->fw_url, val->str, strlen(val->str) + 1);
+			c->have_fw_url = true;
+		}
 		return;
 	}
 	if (strcmp(path, "wifi") == 0 && val->type == JL_STR) {
@@ -205,6 +223,12 @@ bool tariff_apply_json(const char *json, size_t len)
 	meter_set_config(&persist.t1, &persist.t4, &persist.cfg);
 	if (memcmp(&before, &persist, sizeof(persist)) != 0) {
 		persist_save(); /* only write flash when something really changed */
+	}
+	/* optional firmware offer (checked again inside ota.c) */
+	if (c.have_fw_version && c.have_fw_url) {
+		ota_offer(c.fw_version, c.fw_url);
+	} else {
+		ota_offer(NULL, NULL);
 	}
 	LOG_INF("tariff accepted: PM=%d pri=%d pri2=%d services=%d", (int)c.v[F_PM],
 		(int)c.v[F_PRI], (int)c.v[F_PRI2], c.service_n);

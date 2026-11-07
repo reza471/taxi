@@ -15,6 +15,7 @@
 #include "report.h"
 #include "postq.h"
 #include "version.h"
+#include "ota.h"
 
 LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 
@@ -500,10 +501,11 @@ static void page_fare4(void)
  * K2 next, K3 previous, K5 exit. Pages (big field / small field):
  *   1 NET  ON / NET OFF           2 HOST UP / HOST BAD / HOST ---
  *   3 PEND  n (records waiting)   4 serial: first 8 chars big, last 4 small
- *   5 SOFT 0.1                    6 TIME SET / TIME ---
+ *   5 SOFT 0.1.0                  6 TIME SET / TIME ---
+ *   7 UPD ---/UPD n (download %)/UPD DONE (reboot waits)/UPD TEST (new firmware on test)/UPD FAIL/UPD OFF
  * (letters K Q V W X are not readable on 7 segments, so they are not used)
  */
-#define INFO_PAGES 6
+#define INFO_PAGES 7
 
 static void page_info(void)
 {
@@ -538,9 +540,34 @@ static void page_info(void)
 	case 4:
 		snprintf(big, sizeof(big), "SOFT %s", FW_VERSION);
 		break;
-	default:
+	case 5:
 		snprintf(big, sizeof(big), clock_is_set() ? "TIME SET" : "TIME ---");
 		break;
+	default: {
+		int pct;
+
+		switch (ota_status(&pct)) {
+		case OTA_DOWNLOADING:
+			snprintf(big, sizeof(big), "UPD %3d", clampi(pct, 0, 100));
+			break;
+		case OTA_READY:
+			snprintf(big, sizeof(big), "UPD DONE");
+			break;
+		case OTA_TESTING:
+			snprintf(big, sizeof(big), "UPD TEST");
+			break;
+		case OTA_FAILED:
+			snprintf(big, sizeof(big), "UPD FAIL");
+			break;
+		case OTA_DISABLED:
+			snprintf(big, sizeof(big), "UPD  OFF");
+			break;
+		default:
+			snprintf(big, sizeof(big), "UPD  ---");
+			break;
+		}
+		break;
+	}
 	}
 
 	if (PRESSED(2)) {

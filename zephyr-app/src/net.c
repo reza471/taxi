@@ -23,6 +23,7 @@
 #include "trip_store.h"
 #include "report.h"
 #include "urlq.h"
+#include "ota.h"
 #include "wdog.h"
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
@@ -316,11 +317,17 @@ static bool ntp_sync(void)
 }
 
 /* ---------------- HTTPS ---------------- */
+static int net_wd = -1; /* watchdog channel of the net thread */
+
 struct resp_ctx {
 	char *buf;
 	size_t size;
 	size_t len;
 	int status;
+	net_sink_t sink; /* body goes to the sink (download) instead of the buffer */
+	void *sink_user;
+	int sock;
+	bool aborted;
 };
 
 static int resp_handler(struct http_response *rsp, enum http_final_call final_data, void *user)
@@ -328,7 +335,23 @@ static int resp_handler(struct http_response *rsp, enum http_final_call final_da
 	struct resp_ctx *c = user;
 
 	c->status = rsp->http_status_code;
-	if (rsp->body_found && rsp->body_frag_start && c->buf) {
+	wdog_feed(net_wd); /* a long download keeps the watchdog happy while data arrives */
+
+	if (!rsp->body_found || !rsp->body_frag_start || c->aborted) {
+		return 0;
+	}
+	if (c->sink) {
+		if (rsp->http_status_code == 200 && rsp->body_frag_len > 0 &&
+		    c->sink((const uint8_t *)rsp->body_frag_start, rsp->body_frag_len,
+			    c->sink_user) < 0) {
+			/* the sink wants to stop: close the socket, the request ends with an error */
+			c->aborted = true;
+			if (c->sock >= 0) {
+				zsock_close(c->sock);
+				c->sock = -1;
+			}
+		}
+	} else if (c->buf) {
 		size_t n = MIN(rsp->body_frag_len, c->size - 1 - c->len);
 
 		memcpy(c->buf + c->len, rsp->body_frag_start, n);
@@ -338,17 +361,24 @@ static int resp_handler(struct http_response *rsp, enum http_final_call final_da
 	return 0;
 }
 
-/* Returns the HTTP status code, or a negative error. */
-static int https_request(enum http_method method, const char *path, char *body, size_t body_size)
+/* Returns the HTTP status code, or a negative error. `api` = this is the tariff server
+ * (its answer decides the HOST UP/BAD text). */
+static int https_do(enum http_method method, const char *host, uint16_t port, const char *path,
+		    char *body, size_t body_size, net_sink_t sink, void *sink_user,
+		    int timeout_ms, bool api)
 {
 	static uint8_t rx_buf[1024];
 	struct zsock_addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
 	struct zsock_addrinfo *res = NULL;
+	char port_str[8];
 	int ret;
 
-	if (zsock_getaddrinfo(SERVER_HOST, SERVER_PORT, &hints, &res) != 0 || !res) {
-		LOG_WRN("server DNS failed");
-		server_state = -1;
+	snprintf(port_str, sizeof(port_str), "%u", port);
+	if (zsock_getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+		LOG_WRN("DNS failed for %s", host);
+		if (api) {
+			server_state = -1;
+		}
 		return -EHOSTUNREACH;
 	}
 
@@ -361,7 +391,8 @@ static int https_request(enum http_method method, const char *path, char *body, 
 
 	/* NOTE: no CA certificate is installed, so the server is NOT verified.
 	 * This is the same as the old Arduino firmware. Add a CA with tls_credential_add()
-	 * and use TLS_PEER_VERIFY_REQUIRED + TLS_SEC_TAG_LIST for real security. */
+	 * and use TLS_PEER_VERIFY_REQUIRED + TLS_SEC_TAG_LIST for real security.
+	 * (A firmware download is safe anyway: MCUboot checks the signature of the image.) */
 	int verify = TLS_PEER_VERIFY_NONE;
 
 	struct zsock_timeval tmo = {.tv_sec = 10, .tv_usec = 0};
@@ -369,24 +400,27 @@ static int https_request(enum http_method method, const char *path, char *body, 
 	zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
 	zsock_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
 	zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY, &verify, sizeof(verify));
-	zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME, SERVER_HOST, sizeof(SERVER_HOST));
+	zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME, host, strlen(host) + 1);
 
 	ret = zsock_connect(sock, res->ai_addr, res->ai_addrlen);
 	zsock_freeaddrinfo(res);
 	if (ret < 0) {
 		ret = -errno;
 		zsock_close(sock);
-		LOG_WRN("connect failed: %d", ret);
-		server_state = -1;
+		LOG_WRN("connect to %s failed: %d", host, ret);
+		if (api) {
+			server_state = -1;
+		}
 		return ret;
 	}
 
 	static const char *headers[] = {"Content-Length: 0\r\n", NULL};
-	struct resp_ctx ctx = {.buf = body, .size = body_size, .len = 0, .status = 0};
+	struct resp_ctx ctx = {.buf = body, .size = body_size, .len = 0, .status = 0,
+			       .sink = sink, .sink_user = sink_user, .sock = sock, .aborted = false};
 	struct http_request req = {
 		.method = method,
 		.url = path,
-		.host = SERVER_HOST,
+		.host = host,
 		.protocol = "HTTP/1.1",
 		.response = resp_handler,
 		.recv_buf = rx_buf,
@@ -400,15 +434,35 @@ static int https_request(enum http_method method, const char *path, char *body, 
 		body[0] = '\0';
 	}
 
-	ret = http_client_req(sock, &req, 10 * MSEC_PER_SEC, &ctx);
-	zsock_close(sock);
+	ret = http_client_req(sock, &req, timeout_ms, &ctx);
+	if (ctx.sock >= 0) {
+		zsock_close(ctx.sock); /* not closed by the sink */
+	}
+	if (ctx.aborted) {
+		return -ECANCELED;
+	}
 	if (ret < 0) {
 		LOG_WRN("http request failed: %d", ret);
-		server_state = -1;
+		if (api) {
+			server_state = -1;
+		}
 		return ret;
 	}
-	server_state = 1;
+	if (api) {
+		server_state = 1;
+	}
 	return ctx.status;
+}
+
+static int https_request(enum http_method method, const char *path, char *body, size_t body_size)
+{
+	return https_do(method, SERVER_HOST, 443, path, body, body_size, NULL, NULL,
+			10 * MSEC_PER_SEC, true);
+}
+
+int net_download(const char *host, uint16_t port, const char *path, net_sink_t sink, void *user)
+{
+	return https_do(HTTP_GET, host, port, path, NULL, 0, sink, user, 5 * 60 * MSEC_PER_SEC, false);
 }
 
 static void tariff_fetch(void)
@@ -475,6 +529,9 @@ static void net_thread(void *a, void *b, void *c)
 	int send_fails = 0;
 	bool synced = false;
 	int wd = wdog_add(150000); /* blocking TLS/DNS calls can take a while */
+
+	net_wd = wd;
+	ota_boot_check();
 
 	while (1) {
 		wdog_feed(wd);
@@ -544,6 +601,9 @@ static void net_thread(void *a, void *b, void *c)
 			last_scan = now;
 			wifi_scan();
 		}
+
+		/* firmware: confirm a test image, download an offered one, reboot into it */
+		ota_poll();
 
 		/* 2. upload, oldest first, only when idle; back off when the server fails */
 		if (postq_count() > 0 && now >= send_after && key_rest_ms() >= IDLE_BEFORE_SEND_MS) {

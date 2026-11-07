@@ -7,6 +7,7 @@ target_sources(app PRIVATE
 	core/fare_engine.c
 	core/json_lite.c
 	core/urlq.c
+	core/ota_logic.c
 	src/main.c
 	src/pulse.c
 	src/keys.c
@@ -21,5 +22,6 @@ target_sources(app PRIVATE
 	src/postq.c
 	src/trip_store.c
 	src/report.c
+	src/ota.c
 	src/wdog.c
 )

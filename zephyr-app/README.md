@@ -40,6 +40,46 @@ Key scan 10 ms, debounce 30 ms, UI loop 20 ms, display redraws at once when the 
 (I2C frame about 2 ms). Expected worst case 60-80 ms (old firmware: up to about 350 ms). **Not measured on hardware.**
 A flash write can stall the system for a few ms, so it is done only when no key is in use.
 
+## OTA (firmware update over WiFi)
+
+**Status:** builds, the logic is host tested, the signature check was verified with `imgtool`.
+**The swap/rollback itself was never run on a real ESP32. Bench test it (with a serial cable to recover) before any field use.**
+
+How it works
+1. The tariff JSON may carry two extra fields: `"fw_version":"0.2.0"` and `"fw_url":"https://host/path/taxi-0.2.0.signed.bin"`.
+2. A **newer** version that did not fail before is downloaded into slot 1. Only when the meter is idle: no running trip and no key
+   for 60 s. The download stops at once if the driver touches a key or starts a trip (and tries again later).
+3. The image header is checked while it arrives (MCUboot magic, version equals the offer, size fits the slot).
+4. `boot_request_upgrade(TEST)`, then a reboot when the meter is idle (running trips are saved first).
+5. **MCUboot checks the ECDSA P-256 signature** and swaps the images (swap mode with the scratch partition).
+   An unsigned or damaged file is refused and the old firmware keeps running.
+6. The new firmware must reach the server (`HOST UP`) and run 2 minutes without a reset, then it confirms itself.
+   Any reset before that (crash, watchdog, power loss) makes MCUboot put the **old** firmware back; that version is then blocked.
+   A version is also blocked after 3 failed download attempts.
+
+Safety facts
+- TLS is not verified (see risks), but that is **not** a problem for firmware: only an image signed with your private key is accepted.
+  The worst a fake server can do is waste bandwidth (a version that fails is not tried again).
+- `sysbuild.cmake` refuses to build without your own key (the MCUboot project's test key is public).
+- The key must stay offline and out of git (`.gitignore` blocks `*.pem`). Lose the key = no more OTA for already installed meters.
+- A meter running the old non-MCUboot build can not be updated over the air once: the first install of the bootloader needs a cable.
+
+Build and release
+```
+python3 <zephyr-ws>/bootloader/mcuboot/scripts/imgtool.py keygen -k taxi_ota_key.pem -t ecdsa-p256   # once, keep it safe
+west build --sysbuild -b esp32_devkitc/esp32/procpu zephyr-app -- -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"$PWD/taxi_ota_key.pem\"
+west flash --build-dir build        # first install with a cable: bootloader + app
+# release: raise the number in zephyr-app/VERSION, build again, publish
+#   build/zephyr-app/zephyr/zephyr.signed.bin   on an https server, and put fw_version + fw_url in the tariff
+```
+The version in `zephyr-app/VERSION` is also the version in the image header and the text on the INFO page. They can not differ.
+
+Server owner needs to know: serve the file with a plain `200` and `Content-Length` (redirects are not followed), and make the
+`fw_version` in the tariff equal to the image version, otherwise the meter refuses the file. Remove the two fields to stop an update.
+
+INFO page 7 shows the state: `UPD ---`, `UPD  42` (percent), `UPD DONE` (waiting for an idle moment to reboot),
+`UPD TEST` (new firmware on test), `UPD FAIL`, `UPD  OFF` (built without MCUboot).
+
 ## Known risks (read before flashing)
 
 - **RAM**: fixed by `CONFIG_ESP32_REGION_1_NOINIT=y` (stacks, kernel heap and net buffers go to the free DRAM1 region).
@@ -101,6 +141,14 @@ Fare engine (plain gcc):
 
 ```
 gcc -Wall -Wextra -O1 -fsanitize=address,undefined -o /tmp/test_fare core/fare_engine.c tests/test_fare.c && /tmp/test_fare
+```
+
+JSON reader (with a 300k-case fuzz run), request builder and OTA logic (plain gcc):
+
+```
+gcc -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -o /tmp/tj core/json_lite.c tests/test_json.c -lm && /tmp/tj
+gcc -O1 -fsanitize=address,undefined -o /tmp/tu core/urlq.c tests/test_urlq.c && /tmp/tu
+gcc -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -o /tmp/to core/ota_logic.c tests/test_ota.c && /tmp/to
 ```
 
 Queue, flash persistence and tariff JSON (Zephyr `native_sim`, simulated flash, runs the binary

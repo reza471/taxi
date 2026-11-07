@@ -22,7 +22,7 @@
 #define JL_MAX_DEPTH 8
 #define JL_MAX_LEN 16384
 #define JL_PATH_MAX 96
-#define JL_STR_MAX 96 /* longer strings are cut and flagged */
+#define JL_STR_MAX 192 /* longer strings are cut and flagged */
 
 typedef enum { JL_NUM, JL_STR, JL_BOOL, JL_NULL } jl_type_t;
 

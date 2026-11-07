@@ -66,7 +66,7 @@ def main(path):
             continue
         sub = {}
         if "%s" in lit and "SOFT" in lit:
-            sub[lit] = "0.1"
+            sub[lit] = "0.1.0"
         text = shown_len(lit, sub)
         n = digits(text)
         checked += 1
