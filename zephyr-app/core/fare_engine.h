@@ -37,6 +37,10 @@ typedef struct {
 	bool night;
 	int32_t start_fare;      /* start fare incl. night surcharge, Rial */
 	int64_t sum_micro;       /* accumulated cost in micro-Rial (without start fare) */
+	int64_t time_micro;      /* part of sum_micro that is waiting-time cost */
+	int64_t night_micro;     /* part of the distance cost that is the night surcharge */
+	int32_t start_night_extra; /* night surcharge inside start_fare, Rial */
+	int32_t max_speed_kmh;
 	int64_t pulses_total;    /* all pulses since start (even free ones) */
 	int64_t pulses_charged;  /* pulses already past the free distance */
 	int32_t seconds_total;   /* seconds since start, not paused */
@@ -56,6 +60,18 @@ void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses);
 
 /* Current fare in Rial: start fare + cost, rounded DOWN to `fraction`. */
 int64_t fare_total(const fare_ch_t *c, const fare_tariff_t *t);
+
+/* Price split for the server (all in Rial):
+ *   traffic_price = waiting-time cost (stopped / slow traffic)
+ *   trip_price    = route price = total - traffic_price (start fare + distance)
+ *   night_price   = night surcharge that is inside trip_price (0 by day)
+ */
+int64_t fare_traffic_price(const fare_ch_t *c, const fare_tariff_t *t);
+int64_t fare_trip_price(const fare_ch_t *c, const fare_tariff_t *t);
+int64_t fare_night_price(const fare_ch_t *c, const fare_tariff_t *t);
+
+/* Average speed over the whole trip, km/h. */
+int32_t fare_avg_speed_kmh(const fare_ch_t *c, const fare_tariff_t *t);
 
 /* Distance in meters since start. */
 int64_t fare_distance_m(const fare_ch_t *c, const fare_tariff_t *t);

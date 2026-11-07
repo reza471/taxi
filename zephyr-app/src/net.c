@@ -132,14 +132,16 @@ void trip_submit(int bt, const meter_snap_t *s, const char *start_hhmm)
 	int h, m;
 
 	clock_get_hm(&h, &m);
-	/* trip_price, traffic_price, night_price, speeds were placeholders (0) in the old code */
+	/* trip_price = route price, night_price = night part of it, traffic_price = waiting.
+	 * traffic_distance is not measured yet (0). */
 	snprintf(url, sizeof(url),
 		 "/api/taxi/SetTaxiEnd?driver_id=%s&serial=%s&bt_number=%d&start_time=%s"
 		 "&stop_time=%02d:%02d&trip_distance=%d&trip_duration=%d&traffic_distance=0"
-		 "&traffic_duration=%d&avg_speed=0&max_speed=0&trip_price=0&traffic_price=0"
-		 "&night_price=0&total_price=%lld",
+		 "&traffic_duration=%d&avg_speed=%d&max_speed=%d&trip_price=%lld"
+		 "&traffic_price=%lld&night_price=%lld&total_price=%lld",
 		 serial, serial, bt, start_hhmm, h, m, s->dist_m, s->duration_s, s->wait_s,
-		 (long long)s->total_rial);
+		 s->avg_speed_kmh, s->max_speed_kmh, (long long)s->trip_price,
+		 (long long)s->traffic_price, (long long)s->night_price, (long long)s->total_rial);
 	net_post(url);
 }
 

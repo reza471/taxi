@@ -27,6 +27,11 @@ typedef struct {
 	int32_t dist_m;
 	int32_t wait_s; /* seconds counted as waiting */
 	int32_t duration_s;
+	int64_t trip_price;    /* route price (start fare + distance) */
+	int64_t traffic_price; /* waiting-time price */
+	int64_t night_price;   /* night surcharge inside trip_price */
+	int32_t avg_speed_kmh;
+	int32_t max_speed_kmh;
 } meter_snap_t;
 
 void meter_init(void);

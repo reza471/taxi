@@ -107,6 +107,11 @@ void meter_snap(int i, meter_snap_t *o)
 	o->dist_m = (int32_t)fare_distance_m(&ch[i], tar[i]);
 	o->wait_s = ch[i].seconds_slow;
 	o->duration_s = ch[i].seconds_total;
+	o->trip_price = ch[i].active ? fare_trip_price(&ch[i], tar[i]) : 0;
+	o->traffic_price = ch[i].active ? fare_traffic_price(&ch[i], tar[i]) : 0;
+	o->night_price = ch[i].active ? fare_night_price(&ch[i], tar[i]) : 0;
+	o->avg_speed_kmh = fare_avg_speed_kmh(&ch[i], tar[i]);
+	o->max_speed_kmh = ch[i].max_speed_kmh;
 	k_mutex_unlock(&lock);
 }
 

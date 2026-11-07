@@ -18,16 +18,17 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 
 ## Known risks (read before flashing)
 
-- **RAM is almost full**: DRAM 99.4 % used by the build (~1.2 KB free). WiFi + TLS need most of it.
-  TLS heap is 40 KB and the TLS record buffer is 8 KB. A server with a big certificate chain may fail the handshake.
-  First thing to check on hardware: `west build` log, then the first HTTPS call.
+- **RAM**: fixed by `CONFIG_ESP32_REGION_1_NOINIT=y` (stacks, kernel heap and net buffers go to the free DRAM1 region).
+  Build now: DRAM0 83 %, DRAM1 49 %, IRAM 36 %. TLS heap is 56 KB, TLS record buffer 8 KB.
+  Still check the first HTTPS call on hardware (big certificate chain).
 - **No TLS certificate check** (same as the old Arduino code). See `https_request()` in `src/net.c`.
 - Server JSON must use plain numbers (`1`, not `true`) and integers (no `1318.5`). Zephyr's JSON parser is strict.
 - The WiFi radio blobs are downloaded with `west blobs fetch hal_espressif`. If `github.com/.../raw` is blocked,
   download them from `raw.githubusercontent.com` and check the SHA256 (see notes below).
 - Buzzer uses a software tone (busy wait in a low priority thread). Replace with PWM if it sounds bad.
-- Trip upload: only serial, times, distance, duration, wait time and total are real. `trip_price`, `traffic_price`,
-  `night_price`, `avg_speed`, `max_speed` are still 0 (same as the old firmware). Ask the server owner what they mean.
+- Trip upload fields: `trip_price` = route price (start fare + distance), `night_price` = night surcharge inside it
+  (0 by day), `traffic_price` = waiting-time price, `total_price` = trip + traffic. `avg_speed`, `max_speed`,
+  distance, duration, waiting seconds are real. `traffic_distance` is still 0 (not measured).
 - Tariff and clock refresh every 10 min (old firmware: every 30 s). Menu "TARF" forces a reload.
 
 ## Threads
@@ -48,6 +49,7 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 - Night % applies to start fare, distance and time (no hard-coded 10 %). Night is decided at trip start.
 - Speed = pulses per second * 36 / PM (km/h). All math is integer.
 - Distance on the screen is km with one decimal (`1.2`).
+- Price split for the server: traffic = waiting cost; trip = total - traffic; night = night surcharge inside trip.
 
 ## Build
 

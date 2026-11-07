@@ -27,6 +27,7 @@ void fare_start(fare_ch_t *c, const fare_tariff_t *t, int hour)
 	c->active = true;
 	c->night = fare_is_night(t, hour);
 	c->start_fare = (int32_t)with_night(t->pri_cost, c->night, t->percent_night);
+	c->start_night_extra = c->start_fare - t->pri_cost;
 }
 
 /* micro-Rial per pulse */
@@ -52,6 +53,9 @@ void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses)
 
 	/* km/h = pulses/s * (10 m / pm) * 3.6 = pulses * 36 / pm */
 	c->speed_kmh = (int32_t)(((int64_t)pulses * 36) / t->pm);
+	if (c->speed_kmh > c->max_speed_kmh) {
+		c->max_speed_kmh = c->speed_kmh;
+	}
 
 	/* tariff 3 applies after trip3_pulses (checked before adding) */
 	const fare_rate_t *r = (t->trip3_pulses > 0 && c->pulses_total >= t->trip3_pulses)
@@ -69,6 +73,9 @@ void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses)
 
 	c->pulses_charged += charged;
 	c->sum_micro += charged * per_pulse(r, t, c->night);
+	if (c->night) {
+		c->night_micro += charged * (per_pulse(r, t, true) - per_pulse(r, t, false));
+	}
 
 	/* time: only when slow, free part first */
 	c->seconds_total++;
@@ -76,7 +83,10 @@ void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses)
 		c->seconds_slow++;
 		if (c->seconds_slow > t->free_time_s) {
 			c->seconds_charged++;
-			c->sum_micro += per_second(r, t, c->night);
+			int64_t sec = per_second(r, t, c->night);
+
+			c->sum_micro += sec;
+			c->time_micro += sec;
 		}
 	}
 }
@@ -101,4 +111,34 @@ int64_t fare_distance_m(const fare_ch_t *c, const fare_tariff_t *t)
 int32_t fare_distance_hkm(const fare_ch_t *c, const fare_tariff_t *t)
 {
 	return (int32_t)(fare_distance_m(c, t) / 100);
+}
+
+int64_t fare_traffic_price(const fare_ch_t *c, const fare_tariff_t *t)
+{
+	(void)t;
+	return c->time_micro / MICRO;
+}
+
+int64_t fare_trip_price(const fare_ch_t *c, const fare_tariff_t *t)
+{
+	int64_t v = fare_total(c, t) - fare_traffic_price(c, t);
+
+	return v > 0 ? v : 0;
+}
+
+int64_t fare_night_price(const fare_ch_t *c, const fare_tariff_t *t)
+{
+	int64_t v = c->start_night_extra + c->night_micro / MICRO;
+	int64_t trip = fare_trip_price(c, t);
+
+	return v < trip ? v : trip;
+}
+
+int32_t fare_avg_speed_kmh(const fare_ch_t *c, const fare_tariff_t *t)
+{
+	if (c->seconds_total <= 0 || t->pm <= 0) {
+		return 0;
+	}
+	/* km/h = meters / seconds * 3.6 */
+	return (int32_t)((fare_distance_m(c, t) * 36) / ((int64_t)c->seconds_total * 10));
 }

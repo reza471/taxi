@@ -114,6 +114,54 @@ static void test_trip3(void)
 	assert(b > a);
 }
 
+static void test_price_split(void)
+{
+	fare_tariff_t t = base();
+	fare_ch_t c;
+
+	/* day trip: no night price, trip + traffic = total */
+	fare_start(&c, &t, 12);
+	fare_tick(&c, &t, 920); /* 200 m in one second */
+	for (int i = 0; i < 60; i++) {
+		fare_tick(&c, &t, 0);
+	}
+	assert(fare_night_price(&c, &t) == 0);
+	assert(fare_traffic_price(&c, &t) >= 49990);
+	assert(fare_trip_price(&c, &t) + fare_traffic_price(&c, &t) == fare_total(&c, &t));
+	assert(fare_trip_price(&c, &t) >= 19500 + 1317);
+
+	/* night trip: night price is the 10 % extra of start + distance */
+	fare_start(&c, &t, 23);
+	fare_tick(&c, &t, 920);
+	int64_t night = fare_night_price(&c, &t);
+	int64_t trip = fare_trip_price(&c, &t);
+	/* start 19500 -> 21450 (+1950), 200 m 1318 -> ~1449 (+~131) */
+	assert(night >= 2070 && night <= 2090);
+	assert(night < trip);
+	/* night trip price is higher than the same day trip */
+	fare_ch_t d;
+
+	fare_start(&d, &t, 12);
+	fare_tick(&d, &t, 920);
+	assert(trip > fare_trip_price(&d, &t));
+	assert(trip - fare_trip_price(&d, &t) >= night - 2 && trip - fare_trip_price(&d, &t) <= night + 2);
+}
+
+static void test_speeds(void)
+{
+	fare_tariff_t t = base();
+	fare_ch_t c;
+
+	fare_start(&c, &t, 12);
+	fare_tick(&c, &t, 46);  /* 36 km/h */
+	fare_tick(&c, &t, 92);  /* 72 km/h */
+	fare_tick(&c, &t, 0);   /* stopped */
+	assert(c.max_speed_kmh == 72);
+	/* 138 pulses = 30 m in 3 s = 36 km/h */
+	assert(fare_distance_m(&c, &t) == 30);
+	assert(fare_avg_speed_kmh(&c, &t) == 36);
+}
+
 int main(void)
 {
 	test_night();
@@ -123,6 +171,8 @@ int main(void)
 	test_free_distance_and_time();
 	test_pause_and_rounding();
 	test_trip3();
+	test_price_split();
+	test_speeds();
 	puts("all fare tests passed");
 	return 0;
 }
