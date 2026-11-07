@@ -17,5 +17,6 @@ target_sources(app PRIVATE
 	src/tariff.c
 	src/net.c
 	src/postq.c
+	src/trip_store.c
 	src/wdog.c
 )

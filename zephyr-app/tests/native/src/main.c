@@ -13,6 +13,7 @@
 #include "persist.h"
 #include "postq.h"
 #include "tariff.h"
+#include "trip_store.h"
 
 extern int stub_config_calls;
 
@@ -178,6 +179,53 @@ ZTEST(taxi, test_f_tariff_without_wifi_keeps_wifi)
 	zassert_equal(persist.t1.pm, 50);
 }
 
+/* ---------- running trip saved in flash ---------- */
+static void make_running_trip(trip_state_t *st)
+{
+	static const fare_tariff_t t = {
+		.pm = 46, .start_night = 22, .stop_night = 6, .percent_night = 10,
+		.max_stop_kmh = 20, .fraction = 50, .pri_cost = 26200,
+		.rate = {.cost_200 = 1318, .cost_stop = 8000},
+	};
+
+	memset(st, 0, sizeof(*st));
+	fare_start(&st->ch[0], &t, 12);
+	for (int i = 0; i < 100; i++) {
+		fare_tick(&st->ch[0], &t, 40, 12);
+	}
+	st->ch[0].paused = true;
+	fare_start(&st->ch[2], &t, 23);
+	st->is4[2] = 1;
+	strcpy(st->start[0], "13:05");
+	strcpy(st->start[2], "23:50");
+	trip_state_seal(st);
+}
+
+ZTEST(taxi, test_g_trip_state_seal_and_damage)
+{
+	trip_state_t st;
+
+	make_running_trip(&st);
+	zassert_true(trip_state_valid(&st));
+	zassert_true(trip_state_any_active(&st));
+
+	st.ch[0].sum_micro += 1; /* any damaged bit must be detected */
+	zassert_false(trip_state_valid(&st));
+
+	make_running_trip(&st);
+	st.size += 1; /* data from another firmware version */
+	zassert_false(trip_state_valid(&st));
+
+	make_running_trip(&st);
+	st.magic = 0;
+	zassert_false(trip_state_valid(&st));
+
+	memset(&st, 0, sizeof(st));
+	trip_state_seal(&st);
+	zassert_true(trip_state_valid(&st));
+	zassert_false(trip_state_any_active(&st), "empty state has no active trip");
+}
+
 /* ---------- power loss: needs several runs of the binary (see run.sh) ---------- */
 ZTEST(taxi, test_z_persistence_across_reboots)
 {
@@ -194,6 +242,12 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		zassert_true(postq_dirty());
 		postq_flush();
 		zassert_false(postq_dirty());
+		{
+			trip_state_t st;
+
+			make_running_trip(&st);
+			zassert_true(trip_store_save(&st));
+		}
 		break;
 	case 0: /* after reboot: everything must be back, in order */
 		zassert_equal(postq_count(), 3, "queue lost after reboot: %d", postq_count());
@@ -201,6 +255,23 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		zassert_str_equal(b, "/x/SetTaxiStart?n=1");
 		postq_pop();
 		postq_flush(); /* the first one was "sent" */
+		{
+			/* the running trip comes back exactly as it was saved */
+			trip_state_t st, want;
+
+			make_running_trip(&want);
+			zassert_true(trip_store_load(&st), "running trip lost after reboot");
+			zassert_mem_equal(&st, &want, sizeof(st));
+			zassert_true(st.ch[0].paused);
+			zassert_str_equal(st.start[2], "23:50");
+			zassert_equal(st.is4[2], 1);
+			zassert_true(st.ch[0].sum_micro > 0);
+
+			/* the trip ended: save an empty state */
+			memset(&st, 0, sizeof(st));
+			trip_state_seal(&st);
+			zassert_true(trip_store_save(&st));
+		}
 		break;
 	case 1: /* after a second reboot: only the two left, still in order */
 		zassert_equal(postq_count(), 2, "got %d", postq_count());
@@ -212,6 +283,11 @@ ZTEST(taxi, test_z_persistence_across_reboots)
 		/* no flush here on purpose */
 		break;
 	case 2: /* the un-flushed pop and push are gone; the flushed state is intact */
+		{
+			trip_state_t st;
+
+			zassert_false(trip_store_load(&st), "an ended trip must not come back");
+		}
 		zassert_equal(postq_count(), 2, "got %d", postq_count());
 		zassert_true(postq_peek(b, sizeof(b)));
 		zassert_str_equal(b, "/x/SetTaxiEnd?n=1&total=12345");

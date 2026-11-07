@@ -20,6 +20,7 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 
 | Topic | What the code does | Verified |
 |---|---|---|
+| Power loss during a trip | Every 10 s (when no key is in use) all running channels are saved in flash with a CRC. After a restart the trip comes back on the same page with the same fare; the time without power is not counted. When a trip ends, the trip record is saved first, then the running trip is cleared at once, so an ended trip never comes back. At most ~10 s of the fare can be lost. A damaged or old-version save is ignored. | host test: save, restore, damaged data, ended trip |
 | Unsent trips | FIFO queue (16 records) saved in flash. Slot is written before the meta, flash is written only when no key was used for 0.5 s. After a successful send the queue is saved at once. | host test with simulated flash, 6 power cycles, ring wrap-around |
 | Order | Strictly oldest first (trip start before trip end). One failure stops the queue, retry with back-off 5 s ... 2 min. | host test |
 | Queue full | The oldest start/service record is dropped first. Trip ends (they carry the money) are kept. | host test |
@@ -49,6 +50,7 @@ A flash write can stall the system for a few ms, so it is done only when no key 
 - Trip upload fields: `trip_price` = route price (start fare + distance), `night_price` = the part of it charged at night rates
   (full night amount, 0 for a day-only trip), `traffic_price` = waiting-time price, `total_price` = trip + traffic. `avg_speed`, `max_speed`,
   distance, duration, waiting seconds are real. `traffic_distance` is still 0 (not measured).
+- If the power is cut right after a trip ends but before it is cleared (a few ms), the old trip can reappear once.
 - Tariff and clock refresh every 10 min (old firmware: every 30 s). Menu "TARF" forces a reload.
 
 ## Threads

@@ -20,6 +20,7 @@
 #include "persist.h"
 #include "tariff.h"
 #include "postq.h"
+#include "trip_store.h"
 #include "wdog.h"
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
@@ -425,6 +426,7 @@ static bool queue_send_head(void)
 #define SEND_BACKOFF_MIN_MS 5000
 #define SEND_BACKOFF_MAX_MS 120000
 #define FLASH_WRITE_IDLE_MS 500 /* write flash only when no key was used for a moment */
+#define TRIP_CHECKPOINT_MS 10000 /* save the running trip this often (flash wear vs. lost fare) */
 
 static void net_thread(void *a, void *b, void *c)
 {
@@ -433,6 +435,8 @@ static void net_thread(void *a, void *b, void *c)
 	int64_t last_scan = 0;
 	int64_t last_ntp_try = -5000;
 	int64_t send_after = 0;
+	int64_t last_checkpoint = 0;
+	bool checkpoint_active = false; /* the flash holds a running trip */
 	int send_fails = 0;
 	bool synced = false;
 	int wd = wdog_add(150000); /* blocking TLS/DNS calls can take a while */
@@ -447,6 +451,30 @@ static void net_thread(void *a, void *b, void *c)
 		 *    so do it while the driver is not pressing keys) */
 		if (postq_dirty() && key_rest_ms() >= FLASH_WRITE_IDLE_MS) {
 			postq_flush();
+		}
+
+		/* 1b. running trip -> flash, so a power loss does not lose the fare */
+		bool running = meter_any_active();
+
+		if (running && now - last_checkpoint >= TRIP_CHECKPOINT_MS &&
+		    key_rest_ms() >= FLASH_WRITE_IDLE_MS) {
+			trip_state_t st;
+
+			meter_export(&st);
+			if (trip_store_save(&st)) {
+				checkpoint_active = true;
+				last_checkpoint = now;
+			}
+		} else if (!running && checkpoint_active) {
+			/* trip ended: save the trip record first, then clear the running trip.
+			 * Done at once, even while keys are used, so an ended trip never comes back. */
+			postq_flush();
+			trip_state_t st;
+
+			meter_export(&st);
+			if (trip_store_save(&st)) {
+				checkpoint_active = false;
+			}
 		}
 
 		if (!connected) {

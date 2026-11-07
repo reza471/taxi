@@ -9,6 +9,7 @@
 #include "net.h"
 #include "persist.h"
 #include "wdog.h"
+#include "trip_store.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -35,6 +36,14 @@ int main(void)
 	meter_init();
 	persist_init();
 	net_init();
+
+	/* power was lost during a trip: bring it back (time without power is not counted) */
+	trip_state_t saved;
+
+	if (trip_store_load(&saved)) {
+		meter_import(&saved);
+		LOG_WRN("restored a running trip from flash");
+	}
 	ui_start();
 	return 0;
 }

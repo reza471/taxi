@@ -31,7 +31,6 @@ static int64_t now;
 static char big[32];
 static char small_[16];
 static bool colon;
-static char start_hhmm[8];
 
 static int clampi(int v, int lo, int hi)
 {
@@ -54,14 +53,6 @@ static void show_clock(void)
 	clock_get_hm(&h, &m);
 	snprintf(small_, sizeof(small_), "%02d%02d", h, m);
 	colon = true;
-}
-
-static void stamp_start_time(void)
-{
-	int h, m;
-
-	clock_get_hm(&h, &m);
-	snprintf(start_hhmm, sizeof(start_hhmm), "%02d:%02d", h, m);
 }
 
 static void goto_page(enum page p)
@@ -103,7 +94,6 @@ static void page_main(void)
 
 	if (PRESSED(1) && meter_cfg.korsi) {
 		BEEP_MENU();
-		stamp_start_time();
 		meter_start(0, true);
 		net_trip_start(1);
 		goto_page(P_FARE4);
@@ -116,7 +106,6 @@ static void page_main(void)
 	}
 	if (PRESSED(4) && meter_cfg.darbast) {
 		BEEP_MENU();
-		stamp_start_time();
 		meter_start(0, false);
 		net_trip_start(5);
 		goto_page(P_FARE1);
@@ -363,7 +352,7 @@ static void page_fare1(void)
 	if (RELEASED(4)) {
 		if (blinking) {
 			BEEP_MENU();
-			trip_submit(5, &s, start_hhmm);
+			trip_submit(5, &s, s.start_hhmm);
 			meter_stop(0);
 			entered = false;
 			goto_page(P_MAIN);
@@ -425,8 +414,7 @@ static void page_fare4(void)
 		}
 		BEEP_MENU();
 		if (!s[n].active) {
-			stamp_start_time();
-			meter_start(n, true);
+				meter_start(n, true);
 			net_trip_start(n + 1);
 			cur = n;
 			blink_until = 0;
@@ -434,7 +422,7 @@ static void page_fare4(void)
 			break;
 		}
 		if (cur == n && blinking) {
-			trip_submit(n + 1, &s[n], start_hhmm);
+			trip_submit(n + 1, &s[n], s[n].start_hhmm);
 			meter_stop(n);
 			blink_until = 0;
 		} else {
@@ -496,6 +484,16 @@ static struct k_thread ui_tcb;
 
 void ui_start(void)
 {
+	/* after a power loss the meter was restored from flash: go back to its page */
+	if (meter_any_active()) {
+		trip_state_t st;
+
+		meter_export(&st);
+		bool single = st.ch[0].active && !st.is4[0];
+
+		page = single ? P_FARE1 : P_FARE4;
+		LOG_WRN("resumed a trip after restart (%s)", single ? "single meter" : "4 channels");
+	}
 	k_thread_create(&ui_tcb, ui_stack, K_THREAD_STACK_SIZEOF(ui_stack), ui_thread,
 			NULL, NULL, NULL, 7, 0, K_NO_WAIT);
 	k_thread_name_set(&ui_tcb, "ui");

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "fare_engine.h"
+#include "trip_store.h"
 
 /* Feature flags (from the server tariff). */
 typedef struct {
@@ -32,6 +33,7 @@ typedef struct {
 	int64_t night_price;   /* night surcharge inside trip_price */
 	int32_t avg_speed_kmh;
 	int32_t max_speed_kmh;
+	char start_hhmm[8];   /* "HH:MM" when this trip started */
 } meter_snap_t;
 
 void meter_init(void);
@@ -41,6 +43,9 @@ void meter_start(int ch, bool is4ch);
 void meter_stop(int ch);
 bool meter_toggle_pause(int ch);
 void meter_snap(int ch, meter_snap_t *out);
+/* Power-loss recovery */
+void meter_export(trip_state_t *out);  /* sealed snapshot of all channels */
+void meter_import(const trip_state_t *in);
 bool meter_any_active(void);
 uint32_t meter_total_pulses(void);
 void meter_clear_total(void);

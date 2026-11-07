@@ -10,4 +10,6 @@ target_sources(app PRIVATE
 	${APP}/src/postq.c
 	${APP}/src/persist.c
 	${APP}/src/tariff.c
+	${APP}/src/trip_store.c
+	${APP}/core/fare_engine.c
 )

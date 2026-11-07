@@ -1,6 +1,7 @@
 #include "meter.h"
 #include "hw.h"
 #include "wdog.h"
+#include <stdio.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -30,6 +31,7 @@ static K_MUTEX_DEFINE(lock);
 static fare_ch_t ch[4];
 static const fare_tariff_t *tar[4] = {&meter_tariff1, &meter_tariff4, &meter_tariff4, &meter_tariff4};
 static uint32_t total_pulses;
+static char start_hhmm[4][8];
 
 static void meter_thread(void *a, void *b, void *c)
 {
@@ -73,8 +75,11 @@ void meter_set_config(const fare_tariff_t *t1, const fare_tariff_t *t4, const me
 void meter_start(int i, bool is4ch)
 {
 	int h = clock_hour_or_unset();
+	int hh, mm;
 
+	clock_get_hm(&hh, &mm);
 	k_mutex_lock(&lock, K_FOREVER);
+	snprintf(start_hhmm[i], sizeof(start_hhmm[i]), "%02d:%02d", hh % 100, mm % 100);
 	tar[i] = (is4ch || i > 0) ? &meter_tariff4 : &meter_tariff1;
 	fare_start(&ch[i], tar[i], h);
 	k_mutex_unlock(&lock);
@@ -115,6 +120,7 @@ void meter_snap(int i, meter_snap_t *o)
 	o->night_price = ch[i].active ? fare_night_price(&ch[i], tar[i]) : 0;
 	o->avg_speed_kmh = fare_avg_speed_kmh(&ch[i], tar[i]);
 	o->max_speed_kmh = ch[i].max_speed_kmh;
+	memcpy(o->start_hhmm, start_hhmm[i], sizeof(o->start_hhmm));
 	k_mutex_unlock(&lock);
 }
 
@@ -139,5 +145,30 @@ void meter_clear_total(void)
 {
 	k_mutex_lock(&lock, K_FOREVER);
 	total_pulses = 0;
+	k_mutex_unlock(&lock);
+}
+
+void meter_export(trip_state_t *out)
+{
+	memset(out, 0, sizeof(*out));
+	k_mutex_lock(&lock, K_FOREVER);
+	for (int i = 0; i < 4; i++) {
+		out->ch[i] = ch[i];
+		out->is4[i] = (tar[i] == &meter_tariff4);
+		memcpy(out->start[i], start_hhmm[i], sizeof(out->start[i]));
+	}
+	k_mutex_unlock(&lock);
+	trip_state_seal(out);
+}
+
+void meter_import(const trip_state_t *in)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	for (int i = 0; i < 4; i++) {
+		ch[i] = in->ch[i];
+		tar[i] = in->is4[i] ? &meter_tariff4 : &meter_tariff1;
+		memcpy(start_hhmm[i], in->start[i], sizeof(start_hhmm[i]));
+		start_hhmm[i][sizeof(start_hhmm[i]) - 1] = '\0';
+	}
 	k_mutex_unlock(&lock);
 }
