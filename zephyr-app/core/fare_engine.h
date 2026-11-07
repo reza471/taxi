@@ -34,12 +34,12 @@ typedef struct {
 typedef struct {
 	bool active;
 	bool paused;
-	bool night;
-	int32_t start_fare;      /* start fare incl. night surcharge, Rial */
+	bool night;              /* night rates in use right now (updated every tick) */
+	bool night_start;        /* the trip started at night */
+	int32_t start_fare;      /* start fare (night rate if started at night), Rial */
 	int64_t sum_micro;       /* accumulated cost in micro-Rial (without start fare) */
 	int64_t time_micro;      /* part of sum_micro that is waiting-time cost */
-	int64_t night_micro;     /* part of the distance cost that is the night surcharge */
-	int32_t start_night_extra; /* night surcharge inside start_fare, Rial */
+	int64_t night_micro;     /* route cost charged at night rates (distance only), micro-Rial */
 	int32_t max_speed_kmh;
 	int64_t pulses_total;    /* all pulses since start (even free ones) */
 	int64_t pulses_charged;  /* pulses already past the free distance */
@@ -55,8 +55,10 @@ bool fare_is_night(const fare_tariff_t *t, int hour);
 /* Start a trip on a channel. */
 void fare_start(fare_ch_t *c, const fare_tariff_t *t, int hour);
 
-/* Call exactly once per second with the pulses counted in that second. */
-void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses);
+/* Call exactly once per second with the pulses counted in that second and the
+ * current local hour. Night is checked every tick, so the rates change live when
+ * the night starts or ends during a trip. */
+void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses, int hour);
 
 /* Current fare in Rial: start fare + cost, rounded DOWN to `fraction`. */
 int64_t fare_total(const fare_ch_t *c, const fare_tariff_t *t);
@@ -64,7 +66,8 @@ int64_t fare_total(const fare_ch_t *c, const fare_tariff_t *t);
 /* Price split for the server (all in Rial):
  *   traffic_price = waiting-time cost (stopped / slow traffic)
  *   trip_price    = route price = total - traffic_price (start fare + distance)
- *   night_price   = night surcharge that is inside trip_price (0 by day)
+ *   night_price   = the part of trip_price that was charged at night rates
+ *                   (full night amount, not only the extra; 0 for a day-only trip)
  */
 int64_t fare_traffic_price(const fare_ch_t *c, const fare_tariff_t *t);
 int64_t fare_trip_price(const fare_ch_t *c, const fare_tariff_t *t);

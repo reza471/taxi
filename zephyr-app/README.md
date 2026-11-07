@@ -26,8 +26,8 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 - The WiFi radio blobs are downloaded with `west blobs fetch hal_espressif`. If `github.com/.../raw` is blocked,
   download them from `raw.githubusercontent.com` and check the SHA256 (see notes below).
 - Buzzer uses a software tone (busy wait in a low priority thread). Replace with PWM if it sounds bad.
-- Trip upload fields: `trip_price` = route price (start fare + distance), `night_price` = night surcharge inside it
-  (0 by day), `traffic_price` = waiting-time price, `total_price` = trip + traffic. `avg_speed`, `max_speed`,
+- Trip upload fields: `trip_price` = route price (start fare + distance), `night_price` = the part of it charged at night rates
+  (full night amount, 0 for a day-only trip), `traffic_price` = waiting-time price, `total_price` = trip + traffic. `avg_speed`, `max_speed`,
   distance, duration, waiting seconds are real. `traffic_distance` is still 0 (not measured).
 - Tariff and clock refresh every 10 min (old firmware: every 30 s). Menu "TARF" forces a reload.
 
@@ -46,10 +46,13 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 
 - Distance is always charged (after the free distance).
 - Waiting time is charged only when speed is below `Max_stop_km` (after the free time).
-- Night % applies to start fare, distance and time (no hard-coded 10 %). Night is decided at trip start.
+- Night has its own (higher) prices: `Percent_night` applies to start fare, distance and waiting (no hard-coded 10 %).
+  Night is checked **every second**, so the rates change live if night starts or ends during a trip.
+  The start fare uses the night rate only if the trip started at night.
 - Speed = pulses per second * 36 / PM (km/h). All math is integer.
 - Distance on the screen is km with one decimal (`1.2`).
-- Price split for the server: traffic = waiting cost; trip = total - traffic; night = night surcharge inside trip.
+- Price split for the server: traffic = waiting cost; trip = total - traffic (route: start fare + distance);
+  night = the part of the route price charged at night rates (full amount, included in trip).
 
 ## Build
 

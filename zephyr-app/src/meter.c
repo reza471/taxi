@@ -39,12 +39,15 @@ static void meter_thread(void *a, void *b, void *c)
 		k_sleep(K_TIMEOUT_ABS_MS(next));
 
 		uint32_t pulses = pulse_take();
+		int hour, minute;
+
+		clock_get_hm(&hour, &minute);
 
 		k_mutex_lock(&lock, K_FOREVER);
 		total_pulses += pulses;
 		for (int i = 0; i < 4; i++) {
 			if (ch[i].active) {
-				fare_tick(&ch[i], tar[i], pulses);
+				fare_tick(&ch[i], tar[i], pulses, hour);
 			}
 		}
 		k_mutex_unlock(&lock);

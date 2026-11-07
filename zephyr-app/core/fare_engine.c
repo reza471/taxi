@@ -26,8 +26,8 @@ void fare_start(fare_ch_t *c, const fare_tariff_t *t, int hour)
 	memset(c, 0, sizeof(*c));
 	c->active = true;
 	c->night = fare_is_night(t, hour);
+	c->night_start = c->night;
 	c->start_fare = (int32_t)with_night(t->pri_cost, c->night, t->percent_night);
-	c->start_night_extra = c->start_fare - t->pri_cost;
 }
 
 /* micro-Rial per pulse */
@@ -45,11 +45,14 @@ static int64_t per_second(const fare_rate_t *r, const fare_tariff_t *t, bool nig
 	return with_night(v, night, t->percent_night);
 }
 
-void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses)
+void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses, int hour)
 {
 	if (!c->active || c->paused || t->pm <= 0) {
 		return;
 	}
+
+	/* night rates are checked every second */
+	c->night = fare_is_night(t, hour);
 
 	/* km/h = pulses/s * (10 m / pm) * 3.6 = pulses * 36 / pm */
 	c->speed_kmh = (int32_t)(((int64_t)pulses * 36) / t->pm);
@@ -72,9 +75,11 @@ void fare_tick(fare_ch_t *c, const fare_tariff_t *t, uint32_t pulses)
 	int64_t charged = (int64_t)pulses > free_left ? (int64_t)pulses - free_left : 0;
 
 	c->pulses_charged += charged;
-	c->sum_micro += charged * per_pulse(r, t, c->night);
+	int64_t dist_cost = charged * per_pulse(r, t, c->night);
+
+	c->sum_micro += dist_cost;
 	if (c->night) {
-		c->night_micro += charged * (per_pulse(r, t, true) - per_pulse(r, t, false));
+		c->night_micro += dist_cost;
 	}
 
 	/* time: only when slow, free part first */
@@ -128,7 +133,7 @@ int64_t fare_trip_price(const fare_ch_t *c, const fare_tariff_t *t)
 
 int64_t fare_night_price(const fare_ch_t *c, const fare_tariff_t *t)
 {
-	int64_t v = c->start_night_extra + c->night_micro / MICRO;
+	int64_t v = (c->night_start ? c->start_fare : 0) + c->night_micro / MICRO;
 	int64_t trip = fare_trip_price(c, t);
 
 	return v < trip ? v : trip;
