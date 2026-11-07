@@ -32,11 +32,13 @@ Details, risks and the reliability table: `zephyr-app/README.md`.
 export ZEPHYR_BASE=<ws>/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR=<sdk>
 west build -b esp32_devkitc/esp32/procpu zephyr-app          # firmware
 gcc -O1 -fsanitize=address,undefined -o /tmp/tf zephyr-app/core/fare_engine.c zephyr-app/tests/test_fare.c && /tmp/tf   # fare engine
+gcc -O1 -fsanitize=address,undefined -o /tmp/tj zephyr-app/core/json_lite.c zephyr-app/tests/test_json.c -lm && /tmp/tj   # JSON reader + fuzz
+gcc -O1 -fsanitize=address,undefined -o /tmp/tu zephyr-app/core/urlq.c zephyr-app/tests/test_urlq.c && /tmp/tu   # request builder
 zephyr-app/tests/native/run.sh                               # queue, flash, trip, report, tariff JSON (native_sim)
 python3 zephyr-app/tests/lint_text.py zephyr-app/src/ui.c     # every UI text fits the 7-seg and is readable
 ```
 
-Run all four after any change. The native test runs the same binary several times on one simulated flash file
+Run all of them after any change. The native test runs the same binary several times on one simulated flash file
 (= several power cycles). If you add a test that needs a reboot, add a new `phase` case in `tests/native/src/main.c`.
 
 ### Code map (`zephyr-app/`)
@@ -44,6 +46,8 @@ Run all four after any change. The native test runs the same binary several time
 | File | Role |
 |---|---|
 | `core/fare_engine.c/.h` | Pure C fare math, integer only (micro-Rial). No OS calls. Host tested |
+| `core/json_lite.c/.h` | Own tolerant JSON reader (no heap): any key order, nesting, `true`/`1.5`/`"46"` numbers, escapes, depth and size limits. Host tested + 300k-case fuzz |
+| `core/urlq.c/.h` | Safe builder for `path?key=value` requests: percent-encoding, overflow detection |
 | `src/main.c` | Boot order, fatal-error handler (reboots), restores a running trip |
 | `src/meter.c/.h` | `meter` thread (1 s tick), channels, tariffs, live speed, export/import of trips |
 | `src/pulse.c` | GPIO32 interrupt counter with a 100 us glitch filter |
@@ -54,7 +58,7 @@ Run all four after any change. The native test runs the same binary several time
 | `src/postq.c` | FIFO upload queue (16 records) saved in flash |
 | `src/trip_store.c` | Running trip saved every 10 s, restored after power loss |
 | `src/report.c` | Today total/count and last 10 trips, saved in flash |
-| `src/persist.c`, `src/tariff.c` | Settings in flash, server JSON -> tariffs |
+| `src/persist.c`, `src/tariff.c` | Settings in flash. `tariff.c` reads the server JSON with `json_lite` and checks every number against a range; on any problem it refuses the **whole** update and changes nothing (a price never comes from half-understood data). A bad WiFi name/password is ignored, the prices are still applied |
 | `src/clock.c`, `src/beep.c`, `src/wdog.c` | Clock (NTP + uptime), software-tone buzzer, task watchdog + reset cause |
 | `boards/esp32_devkitc_procpu.overlay` | Pin map (same GPIOs as the Arduino version) |
 | `tests/` | `test_fare.c` (gcc), `native/` (native_sim), `lint_text.py` |

@@ -13,4 +13,5 @@ target_sources(app PRIVATE
 	${APP}/src/trip_store.c
 	${APP}/src/report.c
 	${APP}/core/fare_engine.c
+	${APP}/core/json_lite.c
 )

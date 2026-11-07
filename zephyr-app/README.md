@@ -30,6 +30,8 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 | Hang / crash | Task watchdog on the `keys`, `meter`, `ui`, `display`, `net` threads, plus the hardware watchdog as fallback. A fatal error reboots at once. The reset cause is logged at boot. | builds, **not tested on hardware** |
 | Stack overflow | Thread analyzer prints stack use of every thread in the log every 2 min. Read it on the first long run. | builds |
 | Flash wear | Tariff is written only if it changed. Queue writes are 1-2 small entries per record. | host test |
+| Server JSON | Own reader `core/json_lite.c`. Accepts the formats real servers send (true/false, `1318.5`, `"46"`, null, nested, escapes). Every value is range checked, a wrong update is refused as a whole. | gcc tests + 300k fuzz cases under ASAN, native_sim tests |
+| Requests to the server | `core/urlq.c` percent-encodes every value and detects overflow (a cut record is never sent). Same parameter order as the old firmware, including the `?&serial=` quirk of StartService. | gcc tests |
 | Clock not set | Day rates, display shows `----`, backlight stays on. Never charges the night rate by mistake. | host test |
 
 ## Speed (key press to display)

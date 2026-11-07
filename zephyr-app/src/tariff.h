@@ -3,7 +3,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-/* Parse the server tariff JSON, validate it, apply it and save it to flash.
- * `json` is modified in place. Returns true if the tariff was accepted. */
-bool tariff_apply_json(char *json, size_t len);
+/* Read the server tariff JSON, check every value, then apply it and save it to flash
+ * (flash is written only if something changed).
+ * Returns false and changes NOTHING if the JSON is broken or a value is out of range. */
+bool tariff_apply_json(const char *json, size_t len);
 #endif

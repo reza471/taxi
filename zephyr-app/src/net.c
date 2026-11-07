@@ -22,6 +22,7 @@
 #include "postq.h"
 #include "trip_store.h"
 #include "report.h"
+#include "urlq.h"
 #include "wdog.h"
 
 LOG_MODULE_REGISTER(net, LOG_LEVEL_INF);
@@ -107,41 +108,64 @@ bool net_post(const char *path_query)
 void net_service_send(int service_number, int start)
 {
 	char url[URL_MAX];
+	urlq_t q;
 
-	snprintf(url, sizeof(url), "/api/taxi/StartService?&serial=%s&serviceNum=%d&start=%d",
-		 serial, service_number, start);
-	net_post(url);
+	/* "?&serial=" is how the old firmware wrote it: keep it, the server may depend on it */
+	urlq_init(&q, url, sizeof(url), "/api/taxi/StartService?&");
+	urlq_str(&q, "serial", serial);
+	urlq_int(&q, "serviceNum", service_number);
+	urlq_int(&q, "start", start);
+	if (urlq_ok(&q)) {
+		net_post(url);
+	} else {
+		LOG_ERR("service record too long, NOT queued");
+	}
 }
 
 void net_trip_start(int bt)
 {
 	char url[URL_MAX];
+	urlq_t q;
 
-	snprintf(url, sizeof(url), "/api/taxi/SetTaxiStart?serial=%s&bt_number=%d", serial, bt);
-	net_post(url);
+	urlq_init(&q, url, sizeof(url), "/api/taxi/SetTaxiStart?");
+	urlq_str(&q, "serial", serial);
+	urlq_int(&q, "bt_number", bt);
+	if (urlq_ok(&q)) {
+		net_post(url);
+	} else {
+		LOG_ERR("trip start record too long, NOT queued");
+	}
 }
 
 void trip_submit(int bt, const meter_snap_t *s, const char *start_hhmm)
 {
 	char url[URL_MAX];
+	urlq_t q;
 	int h, m;
-	/* keep every number short so the record always fits in the queue slot */
-	const int64_t cap = 999999999;
-	int64_t trip = MIN(s->trip_price, cap), traffic = MIN(s->traffic_price, cap);
-	int64_t night = MIN(s->night_price, cap), total = MIN(s->total_rial, cap);
+	char stop[8];
 
 	clock_get_hm(&h, &m);
+	snprintf(stop, sizeof(stop), "%02d:%02d", h % 100, m % 100);
+
 	/* trip_price = route price, night_price = night part of it, traffic_price = waiting.
 	 * traffic_distance is not measured yet (0). */
-	int n = snprintf(url, sizeof(url),
-		 "/api/taxi/SetTaxiEnd?driver_id=%s&serial=%s&bt_number=%d&start_time=%s"
-		 "&stop_time=%02d:%02d&trip_distance=%d&trip_duration=%d&traffic_distance=0"
-		 "&traffic_duration=%d&avg_speed=%d&max_speed=%d&trip_price=%lld"
-		 "&traffic_price=%lld&night_price=%lld&total_price=%lld",
-		 serial, serial, bt, start_hhmm, h, m, s->dist_m, s->duration_s, s->wait_s,
-		 s->avg_speed_kmh, s->max_speed_kmh, (long long)trip, (long long)traffic,
-		 (long long)night, (long long)total);
-	if (n < 0 || n >= (int)sizeof(url)) {
+	urlq_init(&q, url, sizeof(url), "/api/taxi/SetTaxiEnd?");
+	urlq_str(&q, "driver_id", serial);
+	urlq_str(&q, "serial", serial);
+	urlq_int(&q, "bt_number", bt);
+	urlq_str(&q, "start_time", start_hhmm);
+	urlq_str(&q, "stop_time", stop);
+	urlq_int(&q, "trip_distance", s->dist_m);
+	urlq_int(&q, "trip_duration", s->duration_s);
+	urlq_int(&q, "traffic_distance", 0);
+	urlq_int(&q, "traffic_duration", s->wait_s);
+	urlq_int(&q, "avg_speed", s->avg_speed_kmh);
+	urlq_int(&q, "max_speed", s->max_speed_kmh);
+	urlq_int(&q, "trip_price", s->trip_price);
+	urlq_int(&q, "traffic_price", s->traffic_price);
+	urlq_int(&q, "night_price", s->night_price);
+	urlq_int(&q, "total_price", s->total_rial);
+	if (!urlq_ok(&q)) {
 		LOG_ERR("trip record too long, NOT queued");
 		return;
 	}

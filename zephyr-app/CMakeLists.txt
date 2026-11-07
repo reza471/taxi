@@ -5,6 +5,8 @@ project(taxi_meter)
 target_include_directories(app PRIVATE core src)
 target_sources(app PRIVATE
 	core/fare_engine.c
+	core/json_lite.c
+	core/urlq.c
 	src/main.c
 	src/pulse.c
 	src/keys.c

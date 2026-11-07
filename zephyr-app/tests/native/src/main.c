@@ -181,6 +181,93 @@ ZTEST(taxi, test_f_tariff_without_wifi_keeps_wifi)
 	zassert_equal(persist.t1.pm, 50);
 }
 
+/* ---------- tariff JSON: what could the real server send? ---------- */
+static bool try_tariff(const char *text)
+{
+	static char buf[4096];
+
+	snprintf(buf, sizeof(buf), "%s", text);
+	return tariff_apply_json(buf, strlen(buf));
+}
+
+#define BASE "\"PM\":46,\"pri_cost\":26200,\"Cost_200\":1318,\"Cost_stop\":8000"
+
+ZTEST(taxi, test_h_json_whitespace_and_order)
+{
+	zassert_true(try_tariff("\n{\r\n  \"pri_cost\" : 26200 ,\n\t\"PM\":  46\n}\n"));
+	zassert_equal(persist.t1.pm, 46);
+	zassert_equal(persist.t1.pri_cost, 26200);
+}
+
+ZTEST(taxi, test_i_json_too_many_services)
+{
+	/* the old firmware ignored extra services (kept 10). One long list must not kill the tariff. */
+	zassert_true(try_tariff("{" BASE ",\"service\":[1,2,3,4,5,6,7,8,9,10,11,12]}"),
+		     "a long service list must not reject the tariff");
+	zassert_equal(persist.service_count, 10);
+	zassert_equal(persist.service[9], 10);
+}
+
+ZTEST(taxi, test_j_json_booleans_and_floats)
+{
+	/* server written in JS/PHP may send true/false or 1318.0 */
+	zassert_true(try_tariff("{" BASE ",\"samar\":true,\"korsi\":false,\"darbast\":1}"),
+		     "true/false rejects the whole tariff");
+	zassert_true(persist.cfg.samar);
+	zassert_false(persist.cfg.korsi);
+	zassert_true(try_tariff("{\"PM\":46,\"pri_cost\":26200,\"Cost_200\":1318.5}"),
+		     "a decimal number rejects the whole tariff");
+	zassert_true(persist.t1.rate.cost_200 == 1318 || persist.t1.rate.cost_200 == 1319);
+}
+
+ZTEST(taxi, test_k_json_numbers_as_strings_and_null)
+{
+	/* PHP/MySQL often send numbers as strings and missing values as null */
+	zassert_true(try_tariff("{\"PM\":\"46\",\"pri_cost\":\"26200\",\"wifi\":null,\"service\":null}"),
+		     "string numbers / null reject the whole tariff");
+	zassert_equal(persist.t1.pm, 46);
+	zassert_equal(persist.t1.pri_cost, 26200);
+}
+
+ZTEST(taxi, test_l_json_nested_and_extra_keys)
+{
+	/* extra keys with objects/arrays must be skipped, not break parsing */
+	zassert_true(try_tariff("{\"meta\":{\"a\":[1,2,{\"b\":3}]},\"list\":[[1],[2]]," BASE "}"),
+		     "unknown nested keys break parsing");
+	/* old format seen in the commented code: everything inside "taxiFare" */
+	zassert_true(try_tariff("{\"taxiFare\":{" BASE "}}"), "wrapper object {\"taxiFare\":{...}} not accepted");
+}
+
+ZTEST(taxi, test_m_json_big_and_negative_numbers)
+{
+	zassert_false(try_tariff("{\"PM\":46,\"pri_cost\":99999999999999}"),
+		      "a number that does not fit 32 bit must be rejected, not wrapped");
+	zassert_false(try_tariff("{\"PM\":46,\"pri_cost\":-5}"), "a negative fare must be rejected");
+	zassert_false(try_tariff("{\"PM\":46,\"Percent_night\":900}"), "silly night percent must be rejected");
+	zassert_false(try_tariff("{\"PM\":46,\"fraction\":-1}"), "negative rounding must be rejected");
+	zassert_false(try_tariff("{\"PM\":46,\"Start_night\":99}"), "hour 99 must be rejected");
+}
+
+ZTEST(taxi, test_n_json_strings)
+{
+	zassert_true(try_tariff("{" BASE ",\"wifi\":\"Caf\\u00e9 Net\",\"wifiPass\":\"p\\\"ss\\\\w\"}"));
+	zassert_str_equal(persist.pass, "p\"ss\\w", "escaped characters in the password");
+	/* a name longer than the field must not overflow or be cut silently */
+	/* a bad WiFi name must not stop the prices, and must not change the saved WiFi */
+	zassert_true(try_tariff("{" BASE ",\"wifi\":\"0123456789012345678901234567890123456789\"}"));
+	zassert_str_equal(persist.ssid, "Caf\xc3\xa9 Net", "WiFi kept");
+	zassert_false(try_tariff("{\"PM\":46,\"Cost_200\":99999999999}"), "too big for a price");
+}
+
+ZTEST(taxi, test_o_json_garbage)
+{
+	zassert_false(try_tariff("<html>502 Bad Gateway</html>"));
+	zassert_false(try_tariff("[1,2,3]"));
+	zassert_false(try_tariff("{\"PM\":46,"));
+	zassert_false(try_tariff("null"));
+	zassert_false(try_tariff("{}"), "empty object (PM missing)");
+}
+
 /* ---------- report helpers ---------- */
 static void expect_hist(int newest_total, int n)
 {
