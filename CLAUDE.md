@@ -18,6 +18,12 @@ Language note: code comments and some names are Persian/Finglish. See the glossa
 - `Taxiwifi.code-workspace` expects a sibling folder `../ht16` (old HT16K33 driver work). It is not part of this repo.
 - `src/Archive/` holds old `.rar/.zip` snapshots. `src/vs_BuildTools.exe` is a stray binary. Ignore them. Do not edit them.
 
+## Zephyr rewrite (`zephyr-app/`, branch `claude/zephyr-rewrite`)
+
+A rewrite for Zephyr v4.2 (ESP32 DevKitC) lives in `zephyr-app/`. See `zephyr-app/README.md` for status, build steps and risks.
+The Arduino code in `src/` is still the reference for behavior. The Zephyr fare engine (`zephyr-app/core/fare_engine.c`) fixes
+known issues 1-5 below and has host tests. Do not edit `src/` for the rewrite.
+
 ## Source map (`src/`)
 
 | File | Role |

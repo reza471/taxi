@@ -10,6 +10,7 @@
 #include "hw.h"
 #include "meter.h"
 #include "ui.h"
+#include "net.h"
 
 LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 
@@ -47,6 +48,14 @@ static void show_clock(void)
 	clock_get_hm(&h, &m);
 	snprintf(small_, sizeof(small_), "%02d%02d", h, m);
 	colon = true;
+}
+
+static void stamp_start_time(void)
+{
+	int h, m;
+
+	clock_get_hm(&h, &m);
+	snprintf(start_hhmm, sizeof(start_hhmm), "%02d:%02d", h, m);
 }
 
 static void goto_page(enum page p)
@@ -88,6 +97,7 @@ static void page_main(void)
 
 	if (PRESSED(1) && meter_cfg.korsi) {
 		BEEP_MENU();
+		stamp_start_time();
 		meter_start(0, true);
 		net_trip_start(1);
 		goto_page(P_FARE4);
@@ -100,10 +110,7 @@ static void page_main(void)
 	}
 	if (PRESSED(4) && meter_cfg.darbast) {
 		BEEP_MENU();
-		int h, m;
-
-		clock_get_hm(&h, &m);
-		snprintf(start_hhmm, sizeof(start_hhmm), "%02d:%02d", h, m);
+		stamp_start_time();
 		meter_start(0, false);
 		net_trip_start(5);
 		goto_page(P_FARE1);
@@ -181,24 +188,72 @@ static void page_menu(void)
 	}
 }
 
-/* ---------------- SAMAR / RESERVE (need the network layer) ---------------- */
+/* ---------------- SAMAR (service numbers) ---------------- */
 static void page_samar(void)
 {
+	static int idx;
+	static bool selected;
+	int count = cfg_service_count();
+
 	colon = false;
-	snprintf(big, sizeof(big), "SR- ----");
 	snprintf(small_, sizeof(small_), "    ");
-	if (STILL(5) && k.hold_ms > 3000) {
+
+	if (count <= 0) {
+		snprintf(big, sizeof(big), "SR- ----");
+		idx = 0;
+	} else if (!selected) {
+		snprintf(big, sizeof(big), "SR- %4d", clampi(cfg_service(idx), 0, 9999));
+	} else {
+		snprintf(big, sizeof(big), "%4d STA", clampi(cfg_service(idx), 0, 9999));
+	}
+
+	if (count > 0 && !selected) {
+		if (PRESSED(1)) {
+			idx = (idx + 1) % count;
+		}
+		if (PRESSED(2)) {
+			idx = (idx + count - 1) % count;
+		}
+		if (PRESSED(3)) {
+			net_service_send(cfg_service(idx), 1);
+			selected = true;
+		}
+	} else if (count > 0 && selected && PRESSED(5)) {
+		net_service_send(cfg_service(idx), 2);
+		idx = 0;
+		selected = false;
+	}
+
+	if (STILL(5) && k.hold_ms > 3000 && !selected) {
+		idx = 0;
 		goto_page(P_MENU);
 	}
 }
 
+/* ---------------- RESERVE (nobat): wait for the dispatch AP ---------------- */
 static void page_reserve(void)
 {
+	static bool entered;
+
 	colon = false;
-	snprintf(big, sizeof(big), (now / 500) & 1 ? "--------" : "        ");
 	snprintf(small_, sizeof(small_), "nobt");
+
+	if (!entered) {
+		entered = true;
+		net_reserve_reset();
+	}
+	net_reserve_scan_request();
+
+	if (net_reserve_found()) {
+		snprintf(big, sizeof(big), "211  ---");
+	} else {
+		snprintf(big, sizeof(big), "%s", (now / 500) & 1 ? "--------" : "        ");
+	}
+
 	if (STILL(5) && k.hold_ms > 3000) {
 		snprintf(small_, sizeof(small_), "    ");
+		entered = false;
+		net_reserve_reset();
 		goto_page(P_MENU);
 	}
 }
@@ -364,6 +419,7 @@ static void page_fare4(void)
 		}
 		BEEP_MENU();
 		if (!s[n].active) {
+			stamp_start_time();
 			meter_start(n, true);
 			net_trip_start(n + 1);
 			cur = n;
@@ -428,7 +484,7 @@ static void ui_thread(void *a, void *b, void *c)
 	}
 }
 
-K_THREAD_STACK_DEFINE(ui_stack, 3072);
+K_THREAD_STACK_DEFINE(ui_stack, 2560);
 static struct k_thread ui_tcb;
 
 void ui_start(void)

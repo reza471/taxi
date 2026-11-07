@@ -13,4 +13,7 @@ target_sources(app PRIVATE
 	src/clock.c
 	src/meter.c
 	src/beep.c
+	src/persist.c
+	src/tariff.c
+	src/net.c
 )

@@ -12,8 +12,23 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 | keys (10 ms scan, 30 ms debounce) | done, **not tested on hardware** |
 | display (HT16K33 remap, dp support, WiFi LEDs) | done, **not tested on hardware** |
 | pages: main, menu, single meter, 4-channel, pulse, off | done, **not tested on hardware** |
-| samar / reserve pages | placeholder (need network) |
-| WiFi, NTP clock, tariff download, trip upload queue, settings storage | **not written yet** (stubs in `src/main.c`) |
+| samar / reserve pages | done, **not tested on hardware** |
+| WiFi (STA), NTP clock (ntp.day.ir, +03:30), tariff download (JSON), trip/service upload queue (10 slots) | done, **not tested** (builds only) |
+| settings in flash (`storage` partition, Zephyr settings/NVS) | done, **not tested** |
+
+## Known risks (read before flashing)
+
+- **RAM is almost full**: DRAM 99.4 % used by the build (~1.2 KB free). WiFi + TLS need most of it.
+  TLS heap is 40 KB and the TLS record buffer is 8 KB. A server with a big certificate chain may fail the handshake.
+  First thing to check on hardware: `west build` log, then the first HTTPS call.
+- **No TLS certificate check** (same as the old Arduino code). See `https_request()` in `src/net.c`.
+- Server JSON must use plain numbers (`1`, not `true`) and integers (no `1318.5`). Zephyr's JSON parser is strict.
+- The WiFi radio blobs are downloaded with `west blobs fetch hal_espressif`. If `github.com/.../raw` is blocked,
+  download them from `raw.githubusercontent.com` and check the SHA256 (see notes below).
+- Buzzer uses a software tone (busy wait in a low priority thread). Replace with PWM if it sounds bad.
+- Trip upload: only serial, times, distance, duration, wait time and total are real. `trip_price`, `traffic_price`,
+  `night_price`, `avg_speed`, `max_speed` are still 0 (same as the old firmware). Ask the server owner what they mean.
+- Tariff and clock refresh every 10 min (old firmware: every 30 s). Menu "TARF" forces a reload.
 
 ## Threads
 
@@ -24,6 +39,7 @@ Same pin map as the Arduino version (see `boards/esp32_devkitc_procpu.overlay`).
 | `ui` | 50 ms | page state machine, never blocks |
 | `display` | 100 ms | I2C frame to the HT16K33 |
 | `beep` | on demand | buzzer (software tone) |
+| `net` | 300 ms | WiFi connect, NTP, tariff, upload queue (blocking is OK here) |
 
 ## Fare rules (the "correct" behavior chosen with the owner)
 
@@ -43,6 +59,8 @@ export ZEPHYR_BASE=$PWD/zephyr ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTAL
 west build -b esp32_devkitc/esp32/procpu <this folder>
 west flash
 ```
+
+Blobs: `west blobs fetch hal_espressif` (all chips are checked by the build, not only ESP32).
 
 Notes: K1 is on GPIO34 (input only, no internal pull-up), it needs an external pull-up.
 `pip install west` can fail building `docopt`; install `docopt-ng` and `pykwalify --no-deps` first.

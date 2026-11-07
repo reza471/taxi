@@ -57,6 +57,15 @@ void meter_init(void)
 {
 }
 
+void meter_set_config(const fare_tariff_t *t1, const fare_tariff_t *t4, const meter_cfg_t *cfg)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	meter_tariff1 = *t1;
+	meter_tariff4 = *t4;
+	meter_cfg = *cfg;
+	k_mutex_unlock(&lock);
+}
+
 void meter_start(int i, bool is4ch)
 {
 	int h, m;
@@ -97,6 +106,7 @@ void meter_snap(int i, meter_snap_t *o)
 	o->hkm = fare_distance_hkm(&ch[i], tar[i]);
 	o->dist_m = (int32_t)fare_distance_m(&ch[i], tar[i]);
 	o->wait_s = ch[i].seconds_slow;
+	o->duration_s = ch[i].seconds_total;
 	k_mutex_unlock(&lock);
 }
 

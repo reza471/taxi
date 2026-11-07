@@ -26,9 +26,12 @@ typedef struct {
 	int32_t hkm;    /* distance in 0.1 km */
 	int32_t dist_m;
 	int32_t wait_s; /* seconds counted as waiting */
+	int32_t duration_s;
 } meter_snap_t;
 
 void meter_init(void);
+/* Replace tariffs and flags (thread safe). */
+void meter_set_config(const fare_tariff_t *t1, const fare_tariff_t *t4, const meter_cfg_t *cfg);
 void meter_start(int ch, bool is4ch);
 void meter_stop(int ch);
 bool meter_toggle_pause(int ch);
