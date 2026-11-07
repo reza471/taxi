@@ -3,3 +3,8 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# OTA signing keys: NEVER commit a private key
+*.pem
+*.key
+taxi_ota_key*

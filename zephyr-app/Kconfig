@@ -1,0 +1,18 @@
+# Application options. Everything else comes from Zephyr.
+
+config TAXI_OTA
+	bool "Firmware update over HTTPS (OTA)"
+	default y
+	depends on BOOTLOADER_MCUBOOT
+	select FLASH
+	select FLASH_MAP
+	select STREAM_FLASH
+	select IMG_MANAGER
+	select IMG_ERASE_PROGRESSIVELY
+	help
+	  The meter downloads a signed MCUboot image into slot 1 when the server offers a newer
+	  version, MCUboot checks the signature and swaps it in, and the new image must prove itself
+	  (talk to the server) before it is confirmed. Without confirmation the old image comes back.
+	  Needs a sysbuild build with MCUboot (see zephyr-app/README.md).
+
+source "Kconfig.zephyr"
