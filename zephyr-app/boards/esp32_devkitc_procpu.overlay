@@ -1,0 +1,28 @@
+/*
+ * Taxi meter pin map (same as the Arduino version).
+ * ESP32: gpio0 = GPIO0..31, gpio1 = GPIO32..39.
+ *   GPIO32 = gpio1 pin 0, GPIO34 = gpio1 pin 2.
+ * I2C0 (SDA=21, SCL=22, 100 kHz) is already set up by the board file.
+ */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	zephyr,user {
+		/* wheel pulse sensor, GPIO32, rising edge, internal pull-up */
+		pulse-gpios = <&gpio1 0 GPIO_PULL_UP>;
+
+		/* K1..K5. K1 = GPIO34 is input-only: it has NO internal pull-up,
+		 * so the board needs an external pull-up on K1. */
+		keys-gpios = <&gpio1 2 GPIO_ACTIVE_LOW>,
+			     <&gpio0 16 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+			     <&gpio0 27 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+			     <&gpio0 26 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+			     <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+		/* display backlight, GPIO2 */
+		backlight-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+
+		/* buzzer, GPIO4 */
+		buzzer-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+	};
+};

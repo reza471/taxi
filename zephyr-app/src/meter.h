@@ -1,0 +1,46 @@
+#ifndef METER_H
+#define METER_H
+#include <stdbool.h>
+#include <stdint.h>
+#include "fare_engine.h"
+
+/* Feature flags (from the server tariff). */
+typedef struct {
+	bool authorized; /* false when the server says "expired" (HTTP 403) */
+	bool korsi;      /* 4-channel meter allowed */
+	bool darbast;    /* single meter allowed */
+	bool samar;
+	bool nobat;
+} meter_cfg_t;
+
+extern meter_cfg_t meter_cfg;
+extern fare_tariff_t meter_tariff1; /* single meter */
+extern fare_tariff_t meter_tariff4; /* 4-channel meter */
+
+typedef struct {
+	bool active;
+	bool paused;
+	bool night;
+	int64_t total_rial;
+	int32_t speed_kmh;
+	int32_t hkm;    /* distance in 0.1 km */
+	int32_t dist_m;
+	int32_t wait_s; /* seconds counted as waiting */
+} meter_snap_t;
+
+void meter_init(void);
+void meter_start(int ch, bool is4ch);
+void meter_stop(int ch);
+bool meter_toggle_pause(int ch);
+void meter_snap(int ch, meter_snap_t *out);
+bool meter_any_active(void);
+uint32_t meter_total_pulses(void);
+void meter_clear_total(void);
+
+/* Implemented outside (network layer). Weak stubs live in main.c for now. */
+void trip_submit(int bt_number, const meter_snap_t *s, const char *start_hhmm);
+void net_reload_tariff(void);
+void net_trip_start(int bt_number);
+void net_reset_wifi(void);
+
+#endif

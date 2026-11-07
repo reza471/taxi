@@ -1,0 +1,125 @@
+#include "meter.h"
+#include "hw.h"
+#include <string.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(meter, LOG_LEVEL_INF);
+
+meter_cfg_t meter_cfg = {.authorized = true, .korsi = true, .darbast = true,
+			 .samar = true, .nobat = true};
+
+/* Placeholder defaults. The real values come from the server tariff. */
+fare_tariff_t meter_tariff1 = {
+	.pm = 46, .start_night = 22, .stop_night = 6, .percent_night = 10,
+	.max_stop_kmh = 20, .free_trip_m = 0, .free_time_s = 0, .fraction = 50,
+	.trip3_pulses = 0, .pri_cost = 26200,
+	.rate = {.cost_200 = 1318, .cost_stop = 8000},
+	.rate3 = {.cost_200 = 1318, .cost_stop = 8000},
+};
+fare_tariff_t meter_tariff4 = {
+	.pm = 46, .start_night = 22, .stop_night = 6, .percent_night = 10,
+	.max_stop_kmh = 20, .free_trip_m = 0, .free_time_s = 0, .fraction = 50,
+	.trip3_pulses = 0, .pri_cost = 5000,
+	.rate = {.cost_200 = 384, .cost_stop = 334},
+	.rate3 = {.cost_200 = 384, .cost_stop = 334},
+};
+
+static K_MUTEX_DEFINE(lock);
+static fare_ch_t ch[4];
+static const fare_tariff_t *tar[4] = {&meter_tariff1, &meter_tariff4, &meter_tariff4, &meter_tariff4};
+static uint32_t total_pulses;
+
+static void meter_thread(void *a, void *b, void *c)
+{
+	int64_t next = k_uptime_get();
+
+	while (1) {
+		next += 1000;
+		k_sleep(K_TIMEOUT_ABS_MS(next));
+
+		uint32_t pulses = pulse_take();
+
+		k_mutex_lock(&lock, K_FOREVER);
+		total_pulses += pulses;
+		for (int i = 0; i < 4; i++) {
+			if (ch[i].active) {
+				fare_tick(&ch[i], tar[i], pulses);
+			}
+		}
+		k_mutex_unlock(&lock);
+	}
+}
+
+K_THREAD_DEFINE(meter_tid, 2048, meter_thread, NULL, NULL, NULL, 5, 0, 500);
+
+void meter_init(void)
+{
+}
+
+void meter_start(int i, bool is4ch)
+{
+	int h, m;
+
+	clock_get_hm(&h, &m);
+	k_mutex_lock(&lock, K_FOREVER);
+	tar[i] = (is4ch || i > 0) ? &meter_tariff4 : &meter_tariff1;
+	fare_start(&ch[i], tar[i], h);
+	k_mutex_unlock(&lock);
+}
+
+void meter_stop(int i)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	ch[i].active = false;
+	ch[i].paused = false;
+	k_mutex_unlock(&lock);
+}
+
+bool meter_toggle_pause(int i)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	ch[i].paused = !ch[i].paused;
+	bool p = ch[i].paused;
+
+	k_mutex_unlock(&lock);
+	return p;
+}
+
+void meter_snap(int i, meter_snap_t *o)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	o->active = ch[i].active;
+	o->paused = ch[i].paused;
+	o->night = ch[i].night;
+	o->total_rial = ch[i].active ? fare_total(&ch[i], tar[i]) : 0;
+	o->speed_kmh = ch[i].speed_kmh;
+	o->hkm = fare_distance_hkm(&ch[i], tar[i]);
+	o->dist_m = (int32_t)fare_distance_m(&ch[i], tar[i]);
+	o->wait_s = ch[i].seconds_slow;
+	k_mutex_unlock(&lock);
+}
+
+bool meter_any_active(void)
+{
+	bool a = false;
+
+	k_mutex_lock(&lock, K_FOREVER);
+	for (int i = 0; i < 4; i++) {
+		a |= ch[i].active;
+	}
+	k_mutex_unlock(&lock);
+	return a;
+}
+
+uint32_t meter_total_pulses(void)
+{
+	return total_pulses;
+}
+
+void meter_clear_total(void)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	total_pulses = 0;
+	k_mutex_unlock(&lock);
+}
