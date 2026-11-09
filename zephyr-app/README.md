@@ -132,6 +132,23 @@ west build -b esp32_devkitc/esp32/procpu <repo>/zephyr-app     # plain build (OT
 west flash
 ```
 
+### First flash to the board (step by step)
+
+Building and flashing are two separate steps. `west build` only creates the files on your computer. Nothing reaches the board until `west flash`.
+Run these on Linux or WSL2 (the setup script is bash):
+
+1. Run `setup.sh` once (see above) and `source ~/zephyr-ws/env.sh`, `cd "$ZEPHYR_BASE"`.
+2. Make a signing key once. Keep it out of git (`*.pem` is ignored):
+   `openssl ecparam -name prime256v1 -genkey -noout -out ~/taxi_ota_key.pem`
+3. Build with MCUboot (sysbuild). Without the key the build stops on purpose:
+   `west build --sysbuild -b esp32_devkitc/esp32/procpu <repo>/zephyr-app -- -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"$HOME/taxi_ota_key.pem\"`
+4. Connect the board with USB and flash it. This writes MCUboot and the app. Do this once, because a new board has no program:
+   `west flash`
+5. After this, updates come over WiFi (OTA). You do not need USB again.
+
+Notes: `west flash` is not tested on the real board yet. If it fails, send the full output.
+The mock server never writes to the board. It only talks to it over WiFi.
+
 Needs: git, python3 (3.10+), pip3, cmake, ninja, gcc, curl, xz.
 MCUboot is **not** in this repository: `setup.sh` (west) downloads its source into the workspace and `--sysbuild` builds it.
 What this repo keeps are only its settings (`sysbuild.conf`, `sysbuild.cmake`, `Kconfig`, `VERSION`). The OTA build is in the OTA section.

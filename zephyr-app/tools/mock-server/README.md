@@ -15,6 +15,14 @@ Admin page with charts, dark mode, works on a phone. **For testing only.**
 .\start.ps1 -Ip 203.0.113.7 -Port 8443  # your static IP and the open TCP port
 ```
 
+Notes for Windows:
+- The `.\` before the script name is required. Without it PowerShell does not find the script.
+- If you see *running scripts is disabled on this system*, run this in the same window first (it lasts until you close the window):
+  `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+- If the package install times out (`ReadTimeoutError ... pypi.org`), install by hand with a longer timeout, then start again:
+  `.\.venv\Scripts\python.exe -m pip install --timeout 120 --retries 10 -r requirements.txt`
+  If it keeps failing, try another network (for example a phone hotspot).
+
 The first start installs the packages (`fastapi`, `cryptography`) and makes the certificates. It prints the admin page
 address, the admin token and the build flags for the meter. Open **https://127.0.0.1:8443/admin** (accept the
 certificate warning: the certificate is made by the server itself).
