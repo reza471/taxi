@@ -142,15 +142,16 @@ If `github.com/.../raw` is blocked, `setup.sh` downloads the blobs from `raw.git
 
 ## Test server on your own PC
 
-`tools/mock-server/` (Python, Windows scripts included): tariff and trip server with a web page, scenarios for every kind of
-failure, OTA file serving and an optional NTP server. The firmware address is a Kconfig option
+`tools/mock-server/` (Python, Windows scripts included): tariff and trip server with a database, an admin web page with charts
+(also on a phone), driver registration (each meter gets its driver's settings), fare and duplicate checks, scenarios for every
+kind of failure (HTTP, cut connection, TCP reset, chunked, broken JSON, 7 TLS setups), OTA file serving and an NTP server with a time shift. The firmware address is a Kconfig option
 (`-DCONFIG_TAXI_SERVER_HOST=\"<ip>\" -DCONFIG_TAXI_SERVER_PORT=<port>`, default `node.raxitaxi.ir:443`). See its `README.md`.
 
 ## TLS (important)
 
 The meter must offer the cipher suites that servers use today. The first version only offered static RSA + AES-CBC and sent no SNI;
 5 of 7 typical server setups refused it. `prj.conf` now enables ECDHE (RSA and ECDSA), AES-GCM, SHA-384/512, P-256/P-384/X25519
-and SNI. `tests/tls/check_tls.sh` builds a client with the real firmware settings and runs it against openssl servers
+and SNI, and the TLS record buffer is 16 KB (8 KB failed with a ~10 KB certificate chain; heap peak ~46 KB of 56 KB). `tests/tls/check_tls.sh` builds a client with the real firmware settings and its fixed heap and runs it against openssl servers
 (`BUILD_DIR=<firmware build> MBEDTLS_DIR=<ws>/modules/crypto/mbedtls tests/tls/check_tls.sh`). A server that only speaks TLS 1.3 is still not
 possible (the meter uses TLS 1.2 only).
 
