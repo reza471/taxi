@@ -10,6 +10,11 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/error.h"
+#if defined(MBEDTLS_MEMORY_BUFFER_ALLOC_C)
+#include "mbedtls/memory_buffer_alloc.h"
+/* the same fixed heap as the firmware (CONFIG_MBEDTLS_HEAP_SIZE): shows if the handshake fits */
+static unsigned char heap[TAXI_HEAP_SIZE];
+#endif
 
 int main(int argc, char **argv)
 {
@@ -17,6 +22,9 @@ int main(int argc, char **argv)
 	mbedtls_net_context net; mbedtls_ssl_context ssl; mbedtls_ssl_config conf;
 	mbedtls_entropy_context ent; mbedtls_ctr_drbg_context drbg;
 	char err[200]; int r;
+#if defined(MBEDTLS_MEMORY_BUFFER_ALLOC_C)
+	mbedtls_memory_buffer_alloc_init(heap, sizeof(heap));
+#endif
 
 	mbedtls_net_init(&net); mbedtls_ssl_init(&ssl); mbedtls_ssl_config_init(&conf);
 	mbedtls_entropy_init(&ent); mbedtls_ctr_drbg_init(&drbg);
@@ -42,9 +50,18 @@ int main(int argc, char **argv)
 	if (r <= 0) goto fail;
 	buf[r] = 0; char *eol = strchr((char *)buf, '\r'); if (eol) *eol = 0;
 	printf("server says: %s\n", buf);
+#if defined(MBEDTLS_MEMORY_DEBUG)
+	size_t mu, mb;
+	mbedtls_memory_buffer_alloc_max_get(&mu, &mb);
+	printf("TLS heap peak: %zu of %d bytes\n", mu, TAXI_HEAP_SIZE);
+#endif
 	return 0;
 fail:
 	mbedtls_strerror(r, err, sizeof(err));
 	printf("FAILED: -0x%04x %s\n", (unsigned)-r, err);
+#if defined(MBEDTLS_MEMORY_DEBUG)
+	{ size_t mu, mb; mbedtls_memory_buffer_alloc_max_get(&mu, &mb);
+	  printf("TLS heap peak: %zu of %d bytes\n", mu, TAXI_HEAP_SIZE); }
+#endif
 	return 1;
 }

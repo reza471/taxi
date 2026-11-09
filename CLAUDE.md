@@ -38,7 +38,7 @@ gcc -O1 -fsanitize=address,undefined -o /tmp/to zephyr-app/core/ota_logic.c zeph
 zephyr-app/tests/native/run.sh                               # queue, flash, trip, report, tariff JSON (native_sim)
 python3 zephyr-app/tests/lint_text.py zephyr-app/src/ui.c     # every UI text fits the 7-seg and is readable
 BUILD_DIR=<fw build> MBEDTLS_DIR=<ws>/modules/crypto/mbedtls zephyr-app/tests/tls/check_tls.sh   # TLS suites + SNI against openssl servers
-(cd zephyr-app/tools/mock-server && python3 -m unittest discover -s tests -v)   # test server (needs fastapi, uvicorn, cryptography, gcc)
+(cd zephyr-app/tools/mock-server && python3 -m unittest discover -s tests -v)   # test server (needs fastapi, cryptography, gcc)
 ```
 
 Run all of them after any change. The native test runs the same binary several times on one simulated flash file
@@ -66,7 +66,7 @@ Run all of them after any change. The native test runs the same binary several t
 | `src/persist.c`, `src/tariff.c` | Settings in flash. `tariff.c` reads the server JSON with `json_lite` and checks every number against a range; on any problem it refuses the **whole** update and changes nothing (a price never comes from half-understood data). A bad WiFi name/password is ignored, the prices are still applied |
 | `src/clock.c`, `src/beep.c`, `src/wdog.c` | Clock (NTP + uptime), software-tone buzzer, task watchdog + reset cause |
 | `boards/esp32_devkitc_procpu.overlay` | Pin map (same GPIOs as the Arduino version) |
-| `tools/mock-server/` | Test server for the PC (Python/FastAPI, HTTPS, web page, failure scenarios, OTA files, optional NTP). Windows scripts `start.ps1`, `open-firewall.ps1`. Meter side: Kconfig `TAXI_SERVER_HOST`, `TAXI_SERVER_PORT`, `TAXI_NTP_HOST` |
+| `tools/mock-server/` | Test server for the PC: own asyncio HTTPS server (byte control for chunked / cut / reset faults) + FastAPI admin API on one port, SQLite (`data/taxi.db`), admin UI in `web/` (plain JS, SVG charts, no CDN, dark mode, phone layout). Drivers + tariff profiles (meter gets its driver's settings by serial; ended license = 403), independent fare check (`taxi_mock/fare.py`), duplicate / order checks, 7 TLS profiles, NTP with time shift, `simulate_meter.py`. Windows: `start.ps1`, `open-firewall.ps1`. Meter side: Kconfig `TAXI_SERVER_HOST`, `TAXI_SERVER_PORT`, `TAXI_NTP_HOST`. Read its README |
 | `tests/tls/` | Builds an mbedTLS client with the firmware's real settings and tries openssl servers (ECDHE-only, ECDSA cert, x25519, SNI). Found that the first TLS config could not talk to modern servers |
 | `tools/setup.sh` | One-command setup of west, Zephyr workspace (+ MCUboot), WiFi blobs, SDK. Idempotent. Does not create the OTA key |
 | `VERSION`, `Kconfig`, `sysbuild.conf`, `sysbuild.cmake` | App version, `TAXI_OTA` option, MCUboot settings (the MCUboot source itself is NOT in this repo: west fetches it, sysbuild builds it) |
@@ -139,6 +139,7 @@ It only **measures**: the tariff PM comes from the server, so tell the office th
 - A running trip is saved every 10 s and resumes after a power loss (time without power is not counted). An ended trip is cleared at once.
 - Task watchdog + hardware watchdog + reboot on fatal error. Reset cause and stack use of every thread are in the log.
 - TLS: ECDHE + AES-GCM + SNI are enabled in `prj.conf` on purpose (the default mbedTLS config of Zephyr only has static RSA and no SNI, which modern servers refuse). Do not remove them. TLS 1.2 only.
+  The TLS record buffer is 16 KB (`CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN`): with 8 KB a server with a ~10 KB certificate chain failed. Heap peak then ~46 KB of the 56 KB TLS heap (measured by `tests/tls/check_tls.sh`, which uses the firmware's own fixed heap).
 - Known open points: no TLS certificate check, a duplicate upload is possible after a power loss in a few-ms window,
   DRAM is 85 % used (stacks and net buffers are in DRAM1), key-to-screen latency (expected 60-80 ms) is not measured on hardware.
 

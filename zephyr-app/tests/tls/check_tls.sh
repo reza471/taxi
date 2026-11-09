@@ -23,12 +23,15 @@ gcc -E -dM -x c -imacros "$AUTO" -I"$ZCFG" -I"$MBEDTLS_DIR/include" "$ZCFG/confi
 	| grep -E '^#define MBEDTLS_' > "$OUT/macros.txt"
 { echo '#ifndef HOSTCFG_H'; echo '#define HOSTCFG_H'
   # chip-only settings are left out, the rest is exactly the firmware configuration
-  grep -vE 'MBEDTLS_(CONFIG_H|PLATFORM_EXIT_ALT|PLATFORM_MEMORY|MEMORY_BUFFER_ALLOC_C|MEMORY_ALIGN_MULTIPLE|NO_PLATFORM_ENTROPY|NO_DEFAULT_ENTROPY_SOURCES|HAVE_ASM)' "$OUT/macros.txt"
+  grep -vE 'MBEDTLS_(CONFIG_H|PLATFORM_EXIT_ALT|NO_PLATFORM_ENTROPY|NO_DEFAULT_ENTROPY_SOURCES|HAVE_ASM)' "$OUT/macros.txt"
   grep -E '^#define CONFIG_MBEDTLS_(SSL_MAX_CONTENT_LEN|PSK_MAX_LEN)' "$AUTO"
+  # the firmware's fixed TLS heap (memory_buffer_alloc) with its real size; MEMORY_DEBUG reports the peak
+  echo "#define TAXI_HEAP_SIZE $(grep -E '^#define CONFIG_MBEDTLS_HEAP_SIZE ' "$AUTO" | awk '{print $3}')"
+  echo '#define MBEDTLS_MEMORY_DEBUG'
   # what only the PC needs (sockets, entropy, error text). The TLS settings are NOT touched.
   echo '#define MBEDTLS_NET_C'; echo '#define MBEDTLS_ENTROPY_C'; echo '#define MBEDTLS_ERROR_C'
   echo '#endif'; } | awk '!seen[$0]++' > "$OUT/hostcfg.h"
-echo "firmware TLS settings:"
+echo "firmware TLS settings (record buffer $(grep -E '^#define CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN ' "$AUTO" | awk '{print $3}') B, heap $(grep -E '^#define CONFIG_MBEDTLS_HEAP_SIZE ' "$AUTO" | awk '{print $3}') B):"
 for m in KEY_EXCHANGE_ECDHE_RSA_ENABLED KEY_EXCHANGE_ECDHE_ECDSA_ENABLED KEY_EXCHANGE_RSA_ENABLED GCM_C SHA384_C \
 	 ECP_DP_SECP256R1_ENABLED ECP_DP_CURVE25519_ENABLED SSL_SERVER_NAME_INDICATION SSL_EXTENDED_MASTER_SECRET; do
 	if grep -q "MBEDTLS_$m" "$OUT/macros.txt"; then printf '   %-40s yes\n' "$m"; else printf '   %-40s NO\n' "$m"; fi

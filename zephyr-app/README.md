@@ -132,6 +132,23 @@ west build -b esp32_devkitc/esp32/procpu <repo>/zephyr-app     # plain build (OT
 west flash
 ```
 
+### First flash to the board (step by step)
+
+Building and flashing are two separate steps. `west build` only creates the files on your computer. Nothing reaches the board until `west flash`.
+Run these on Linux or WSL2 (the setup script is bash):
+
+1. Run `setup.sh` once (see above) and `source ~/zephyr-ws/env.sh`, `cd "$ZEPHYR_BASE"`.
+2. Make a signing key once. Keep it out of git (`*.pem` is ignored):
+   `openssl ecparam -name prime256v1 -genkey -noout -out ~/taxi_ota_key.pem`
+3. Build with MCUboot (sysbuild). Without the key the build stops on purpose:
+   `west build --sysbuild -b esp32_devkitc/esp32/procpu <repo>/zephyr-app -- -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"$HOME/taxi_ota_key.pem\"`
+4. Connect the board with USB and flash it. This writes MCUboot and the app. Do this once, because a new board has no program:
+   `west flash`
+5. After this, updates come over WiFi (OTA). You do not need USB again.
+
+Notes: `west flash` is not tested on the real board yet. If it fails, send the full output.
+The mock server never writes to the board. It only talks to it over WiFi.
+
 Needs: git, python3 (3.10+), pip3, cmake, ninja, gcc, curl, xz.
 MCUboot is **not** in this repository: `setup.sh` (west) downloads its source into the workspace and `--sysbuild` builds it.
 What this repo keeps are only its settings (`sysbuild.conf`, `sysbuild.cmake`, `Kconfig`, `VERSION`). The OTA build is in the OTA section.
@@ -142,15 +159,16 @@ If `github.com/.../raw` is blocked, `setup.sh` downloads the blobs from `raw.git
 
 ## Test server on your own PC
 
-`tools/mock-server/` (Python, Windows scripts included): tariff and trip server with a web page, scenarios for every kind of
-failure, OTA file serving and an optional NTP server. The firmware address is a Kconfig option
+`tools/mock-server/` (Python, Windows scripts included): tariff and trip server with a database, an admin web page with charts
+(also on a phone), driver registration (each meter gets its driver's settings), fare and duplicate checks, scenarios for every
+kind of failure (HTTP, cut connection, TCP reset, chunked, broken JSON, 7 TLS setups), OTA file serving and an NTP server with a time shift. The firmware address is a Kconfig option
 (`-DCONFIG_TAXI_SERVER_HOST=\"<ip>\" -DCONFIG_TAXI_SERVER_PORT=<port>`, default `node.raxitaxi.ir:443`). See its `README.md`.
 
 ## TLS (important)
 
 The meter must offer the cipher suites that servers use today. The first version only offered static RSA + AES-CBC and sent no SNI;
 5 of 7 typical server setups refused it. `prj.conf` now enables ECDHE (RSA and ECDSA), AES-GCM, SHA-384/512, P-256/P-384/X25519
-and SNI. `tests/tls/check_tls.sh` builds a client with the real firmware settings and runs it against openssl servers
+and SNI, and the TLS record buffer is 16 KB (8 KB failed with a ~10 KB certificate chain; heap peak ~46 KB of 56 KB). `tests/tls/check_tls.sh` builds a client with the real firmware settings and its fixed heap and runs it against openssl servers
 (`BUILD_DIR=<firmware build> MBEDTLS_DIR=<ws>/modules/crypto/mbedtls tests/tls/check_tls.sh`). A server that only speaks TLS 1.3 is still not
 possible (the meter uses TLS 1.2 only).
 
