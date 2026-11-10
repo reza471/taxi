@@ -126,9 +126,7 @@ static void page_main(void)
 			show_error(ERR_MODE_OFF);
 		} else {
 			BEEP_MENU();
-			meter_start(0, true);
-			net_trip_start(1);
-			goto_page(P_FARE4);
+			goto_page(P_FARE4); /* shows channel 1; a second press starts it */
 			return;
 		}
 	}
@@ -241,26 +239,56 @@ static void page_menu(void)
 	}
 }
 
-/* ---------------- SAMAR (service numbers) ---------------- */
+/* ---------------- SAMAR (service numbers, e.g. a school bus) ----------------
+ * Every service number is one passenger (child). K1 next, K2 previous, K3 toggles the shown number:
+ * first press = "start" (child called / picked up), second press = "done" (child arrived).
+ * Many passengers can be on the way at the same time. The state is kept when you leave the page.
+ * Big field: "SR- 1234" (idle) or "1234 STA" (on the way). Small field: "A  n" = n passengers on the way.
+ * Hold K5 for 3 s: back to the menu.
+ */
+static bool samar_on[SERVICE_MAX];
+
+static int samar_active(int count)
+{
+	int n = 0;
+
+	for (int i = 0; i < count && i < SERVICE_MAX; i++) {
+		n += samar_on[i];
+	}
+	return n;
+}
+
 static void page_samar(void)
 {
 	static int idx;
-	static bool selected;
 	int count = cfg_service_count();
 
 	colon = false;
-	snprintf(small_, sizeof(small_), "    ");
+	if (count > SERVICE_MAX) {
+		count = SERVICE_MAX;
+	}
+	if (idx >= count) {
+		idx = 0;
+	}
+
+	int act = samar_active(count);
+
+	if (act > 0) {
+		snprintf(small_, sizeof(small_), "A %2d", clampi(act, 0, 99));
+	} else {
+		snprintf(small_, sizeof(small_), "    ");
+	}
 
 	if (count <= 0) {
 		snprintf(big, sizeof(big), "SR- ----");
 		idx = 0;
-	} else if (!selected) {
+	} else if (!samar_on[idx]) {
 		snprintf(big, sizeof(big), "SR- %4d", clampi(cfg_service(idx), 0, 9999));
 	} else {
 		snprintf(big, sizeof(big), "%4d STA", clampi(cfg_service(idx), 0, 9999));
 	}
 
-	if (count > 0 && !selected) {
+	if (count > 0) {
 		if (PRESSED(1)) {
 			idx = (idx + 1) % count;
 		}
@@ -268,16 +296,13 @@ static void page_samar(void)
 			idx = (idx + count - 1) % count;
 		}
 		if (PRESSED(3)) {
-			net_service_send(cfg_service(idx), 1);
-			selected = true;
+			BEEP_MENU();
+			net_service_send(cfg_service(idx), samar_on[idx] ? 2 : 1);
+			samar_on[idx] = !samar_on[idx];
 		}
-	} else if (count > 0 && selected && PRESSED(5)) {
-		net_service_send(cfg_service(idx), 2);
-		idx = 0;
-		selected = false;
 	}
 
-	if (STILL(5) && k.hold_ms > 3000 && !selected) {
+	if (STILL(5) && k.hold_ms > 3000) {
 		idx = 0;
 		goto_page(P_MENU);
 	}
@@ -428,70 +453,105 @@ static void page_fare1(void)
 	}
 }
 
-/* ---------------- 4-CHANNEL METER ---------------- */
+/* ---------------- 4-CHANNEL METER ----------------
+ * One page shows one channel (cur). K1..K4 pick the channel:
+ *   - another channel than the shown one: only switch to it (no blink, no start)
+ *   - the shown channel, idle:   starts it. Base fare for 2 s, then the running fare
+ *   - the shown channel, active: blinks for 4 s; press again while blinking = end the trip
+ * An idle channel shows its number: "1-  ----". With no running channel the page closes after 10 s
+ * without a key, or with K5.
+ */
+#define FARE4_IDLE_EXIT_MS 10000
+
 static void page_fare4(void)
 {
 	static int64_t show_until;
 	static int64_t blink_until;
+	static int64_t idle_since;
+	static int64_t base_rial;
 	static int cur;
 	static bool entered;
+	static bool skip_rel[4]; /* the key that opened this page is still down: ignore its release */
 	meter_snap_t s[4];
-
-	if (!entered) {
-		entered = true;
-		show_until = now + BASE_FARE_SHOW_MS;
-		blink_until = 0;
-		cur = 0;
-	}
 
 	for (int i = 0; i < 4; i++) {
 		meter_snap(i, &s[i]);
 	}
 
-	if (now < show_until) {
-		fmt_fare(big, sizeof(big), cur + 1, s[cur].total_rial);
-		show_clock();
-		return;
+	if (!entered) {
+		entered = true;
+		show_until = 0;
+		blink_until = 0;
+		idle_since = now;
+		cur = 0;
+		for (int i = 3; i >= 0; i--) { /* after a power loss: show a running channel */
+			if (s[i].active) {
+				cur = i;
+			}
+		}
+		for (int i = 0; i < 4; i++) {
+			skip_rel[i] = STILL(i + 1);
+		}
 	}
 
 	show_clock();
 
 	bool blinking = now < blink_until;
 
-	if (s[cur].active) {
+	if (s[cur].active && now < show_until) {
+		fmt_fare(big, sizeof(big), cur + 1, base_rial);
+	} else if (s[cur].active) {
 		fmt_fare(big, sizeof(big), cur + 1, s[cur].total_rial);
 	} else {
-		snprintf(big, sizeof(big), "%d ----- ", (cur + 1) % 10);
+		snprintf(big, sizeof(big), "%d-  ----", (cur + 1) % 10);
 	}
 	if (blinking && blink_phase()) {
 		snprintf(big, sizeof(big), "%d-      ", (cur + 1) % 10);
+	}
+	if (now < msg_until) {
+		snprintf(big, sizeof(big), "%s", msg_text);
 	}
 
 	for (int n = 0; n < 4; n++) {
 		if (!RELEASED(n + 1)) {
 			continue;
 		}
-		BEEP_MENU();
-		if (!s[n].active) {
-				meter_start(n, true);
-			net_trip_start(n + 1);
-			cur = n;
-			blink_until = 0;
-			show_until = now + 1000;
-			break;
+		if (skip_rel[n]) {
+			skip_rel[n] = false;
+			continue;
 		}
-		if (cur == n && blinking) {
+		BEEP_MENU();
+		idle_since = now;
+		if (n != cur) {
+			cur = n; /* only switch */
+			blink_until = 0;
+			show_until = 0;
+		} else if (!s[n].active) {
+			if (!meter_cfg.authorized) {
+				show_error(ERR_EXPIRED);
+				continue;
+			}
+			meter_start(n, true);
+			net_trip_start(n + 1);
+			meter_snap_t first;
+
+			meter_snap(n, &first);
+			base_rial = first.total_rial;
+			show_until = now + BASE_FARE_SHOW_MS;
+			blink_until = 0;
+		} else if (blinking) {
 			trip_submit(n + 1, &s[n], s[n].start_hhmm);
 			report_add(n + 1, s[n].total_rial, s[n].dist_m, s[n].start_hhmm);
 			meter_stop(n);
 			blink_until = 0;
 		} else {
-			cur = n;
 			blink_until = now + BLINK_MS;
 		}
 	}
 
-	if (!meter_any_active()) {
+	if (meter_any_active()) {
+		idle_since = now;
+	} else if (PRESSED(5) || now - idle_since >= FARE4_IDLE_EXIT_MS) {
 		entered = false;
 		goto_page(P_MAIN);
 	}

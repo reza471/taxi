@@ -96,7 +96,7 @@ on 7 segments (V looks like U, X like H): never use them. `R` is only kept in th
 
 | Key | Action |
 |---|---|
-| K1 | 4-channel meter (needs `korsi`) |
+| K1 | opens the 4-channel page on channel 1 (needs `korsi`). Nothing starts yet |
 | K2 | pulse counter page |
 | K3 | press: small field clock <-> speed. Hold 10 s: reset WiFi to `Rad` and reboot |
 | K4 | single meter (needs `darbast`) |
@@ -122,7 +122,19 @@ then the last 10 trips newest first (big = fare in Toman, small = start time `HH
 It only **measures**: the tariff PM comes from the server, so tell the office the number.
 
 **Trip screens**: single meter (K2 cycles clock / speed / km / waiting minutes, K3 pause, K4 twice = end),
-4 channels (K1..K4), SAMR (K1 next, K2 previous, K3 select, K5 end), NOBT, pulse page, OFF.
+4 channels, SAMR, NOBT, pulse page, OFF.
+
+**4 channels** (each passenger has his own fare, tariff 2). The page shows one channel; K1..K4 pick it:
+another channel than the shown one = only switch (no blink, no start); the shown channel idle = start (base fare 2 s, then the running fare);
+the shown channel active = blink 4 s, press again while blinking = end the trip. An idle channel shows its number (`1-  ----`).
+No running channel: the page closes after 10 s without a key, or with K5.
+
+**SAMR** (school bus: each service number = one child): K1 next, K2 previous, K3 toggles the shown number
+(1st press `start=1` = child called, 2nd press `start=2` = child arrived). Many children can be on the way at once;
+small field `A  n` = how many. The state stays when you leave the page (it is lost at a reboot). Hold K5 3 s: menu.
+
+**Tariff 3** (long trips): single meter only. After `trip3` pulses the trip is charged with `Cost3_200` / `Cost3_stop`
+(distance and waiting). Not used in the 4-channel mode (same as the Arduino code).
 
 ### OTA (firmware update) - read `zephyr-app/README.md` before touching it
 
