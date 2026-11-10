@@ -226,6 +226,59 @@ def create_admin(ctx):
         return Response(buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
 
+    # ---------------------------------------------------------------- nobat queue + samar services
+    meter = ctx["meter"]
+
+    def _drivers_by_serial():
+        return {d["serial"]: d["name"] for d in db.q("SELECT serial, name FROM drivers WHERE serial != ''")}
+
+    @app.get("/admin/api/nobat")
+    async def nobat_get():
+        meter.nobat_advance()
+        names, now = _drivers_by_serial(), time.time()
+        queue = meter.nobat_queue()
+        for r in queue:
+            r["driver"] = names.get(r["serial"], "")
+            r["wait_s"] = int(now - r["joined"])
+            r["seen_s"] = int(now - (r["last_seen"] or r["joined"]))
+        hist = db.q("SELECT nobat.*, trips.total AS trip_total FROM nobat LEFT JOIN trips ON trips.id = nobat.trip_id"
+                    " WHERE state NOT IN ('wait','turn') ORDER BY done_at DESC LIMIT 30")
+        for r in hist:
+            r["driver"] = names.get(r["serial"], "")
+        services = db.q("SELECT * FROM open_services ORDER BY ts")
+        for r in services:
+            r["driver"] = names.get(r["serial"], "")
+            r["on_way_s"] = int(now - r["ts"])
+        return {"auto_s": st["nobat"].get("auto_s", 0), "stale_s": meter.NOBAT_STALE_S, "queue": queue,
+                "history": hist, "services": services, "now": now}
+
+    @app.put("/admin/api/nobat")
+    async def nobat_put(request: Request):
+        b = await request.json()
+        if "auto_s" in b:
+            st.s["nobat"]["auto_s"] = max(0, min(3600, int(b["auto_s"])))
+        save()
+        return {"ok": True, "auto_s": st["nobat"]["auto_s"]}
+
+    @app.post("/admin/api/nobat/next")
+    async def nobat_next():
+        if db.one("SELECT id FROM nobat WHERE state='turn'"):
+            return PlainTextResponse("a car already has its turn: wait until it takes the passenger or leaves", 409)
+        head = meter.nobat_give_turn()
+        if not head:
+            return PlainTextResponse("the queue is empty", 409)
+        return {"ok": True, "id": head["id"], "serial": head["serial"]}
+
+    @app.delete("/admin/api/nobat/{nid}")
+    async def nobat_remove(nid: int):
+        db.x("UPDATE nobat SET state='left', done_at=? WHERE id=? AND state IN ('wait','turn')", (time.time(), nid))
+        return {"ok": True}
+
+    @app.delete("/admin/api/services/{serial}/{num}")
+    async def service_remove(serial: str, num: int):
+        db.x("DELETE FROM open_services WHERE serial=? AND service=?", (serial, num))
+        return {"ok": True}
+
     @app.delete("/admin/api/data")
     async def clear_data():
         db.clear_logs()

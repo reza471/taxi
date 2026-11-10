@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(ui, LOG_LEVEL_INF);
 #define BEEP_MENU() beep(4000, 100)
 #define BASE_FARE_SHOW_MS 2000
 #define BLINK_MS 4000
+#define MENU_IDLE_MS 30000
 
 enum page { P_MAIN, P_MENU, P_SAMAR, P_RESERVE, P_PULSE, P_FARE1, P_FARE4, P_OFF,
 	    P_INFO, P_REPORT, P_CAL };
@@ -60,10 +61,16 @@ static void show_clock(void)
 	colon = true;
 }
 
+static bool wait_release; /* after a page change: ignore keys until all are up */
+
 static void goto_page(enum page p)
 {
 	page = p;
+	wait_release = true; /* the key that changed the page must not act on the new page */
 }
+
+static bool blink_phase(void);
+static void menu_reset(void);
 
 /* ---------------- OFF ---------------- */
 static void page_off(void)
@@ -164,7 +171,8 @@ static void page_main(void)
 	}
 	if (RELEASED(5) && menu_flag == 1) {
 		menu_flag = 0;
-		snprintf(small_, sizeof(small_), "    ");
+		menu_reset();
+		snprintf(small_, sizeof(small_), "P-1 ");
 		goto_page(P_MENU);
 	}
 }
@@ -190,6 +198,20 @@ static bool menu_pick(int key, const char *label, int id)
 	return false;
 }
 
+static void menu_reset(void)
+{
+	menu_sel = 0;
+	menu_pg = 0;
+}
+
+/* item switched off in the tariff: say so instead of doing nothing */
+static void menu_off(void)
+{
+	snprintf(small_, sizeof(small_), "OFF ");
+	menu_sel = 0;
+	beep(600, 300);
+}
+
 static void page_menu(void)
 {
 	colon = false;
@@ -198,17 +220,22 @@ static void page_menu(void)
 	if (RELEASED(1)) {
 		menu_pg = !menu_pg;
 		menu_sel = 0;
+		snprintf(small_, sizeof(small_), menu_pg ? "P-2 " : "P-1 ");
 	}
-	if (menu_sel == 0 && !(RELEASED(2) || RELEASED(3) || RELEASED(4))) {
+	if (menu_sel == 0 && !(RELEASED(2) || RELEASED(3) || RELEASED(4)) && k.rest_ms > 1500) {
 		snprintf(small_, sizeof(small_), menu_pg ? "P-2 " : "P-1 ");
 	}
 
 	if (menu_pg == 0) {
-		if (RELEASED(2) && meter_cfg.samar && menu_pick(2, "SAMR", 2)) {
+		if (RELEASED(2) && !meter_cfg.samar) {
+			menu_off();
+		} else if (RELEASED(2) && menu_pick(2, "SAMR", 2)) {
 			goto_page(P_SAMAR);
 			return;
 		}
-		if (RELEASED(3) && meter_cfg.nobat && menu_pick(3, "NOBT", 3)) {
+		if (RELEASED(3) && !meter_cfg.nobat) {
+			menu_off();
+		} else if (RELEASED(3) && menu_pick(3, "NOBT", 3)) {
 			goto_page(P_RESERVE);
 			return;
 		}
@@ -308,30 +335,66 @@ static void page_samar(void)
 	}
 }
 
-/* ---------------- RESERVE (nobat): wait for the dispatch AP ---------------- */
+/* ---------------- NOBAT (queue at a taxi station) ----------------
+ * Big field shows what is going on, small field the clock:
+ *   "SEArCH  "  looking for the station WiFi (Usefi)
+ *   "SEnd    "  station found, telling the server "ready"
+ *   "nobt   3"  in the queue, 3 = your place (1 = you are next)
+ *   "tUrn    "  blinking + beeps: your turn. K3 = passenger is in: the single meter starts
+ * Hold K5 3 s: leave the queue, back to the menu.
+ */
 static void page_reserve(void)
 {
 	static bool entered;
-
-	colon = false;
-	snprintf(small_, sizeof(small_), "nobt");
+	static int64_t next_beep;
 
 	if (!entered) {
 		entered = true;
-		net_reserve_reset();
+		next_beep = 0;
+		net_nobat_begin();
 	}
-	net_reserve_scan_request();
+	show_clock();
 
-	if (net_reserve_found()) {
-		snprintf(big, sizeof(big), "211  ---");
-	} else {
-		snprintf(big, sizeof(big), "%s", (now / 500) & 1 ? "--------" : "        ");
+	nb_phase_t ph = net_nobat_phase();
+
+	if (!net_wifi_connected()) {
+		snprintf(big, sizeof(big), "nEt  OFF");
+	} else if (ph == NB_SEARCH) {
+		snprintf(big, sizeof(big), "SEArCH  ");
+	} else if (ph == NB_JOIN) {
+		snprintf(big, sizeof(big), "SEnd    ");
+	} else if (ph == NB_WAIT) {
+		snprintf(big, sizeof(big), "nobt %3d", clampi(net_nobat_position(), 0, 999));
+		next_beep = 0;
+	} else if (ph == NB_TURN) {
+		snprintf(big, sizeof(big), "%s", blink_phase() ? "tUrn    " : "        ");
+		if (now >= next_beep) { /* call the driver again every 10 s until he answers */
+			beep(3000, 150);
+			next_beep = now + 10000;
+		}
+	}
+	if (now < msg_until) {
+		snprintf(big, sizeof(big), "%s", msg_text);
+	}
+
+	if (ph == NB_TURN && PRESSED(3)) {
+		if (!meter_cfg.authorized) {
+			show_error(ERR_EXPIRED);
+			return;
+		}
+		BEEP_MENU();
+		net_nobat_board();
+		entered = false;
+		meter_start(0, false);
+		net_trip_start(5);
+		goto_page(P_FARE1);
+		return;
 	}
 
 	if (STILL(5) && k.hold_ms > 3000) {
-		snprintf(small_, sizeof(small_), "    ");
+		BEEP_MENU();
+		net_nobat_leave();
 		entered = false;
-		net_reserve_reset();
 		goto_page(P_MENU);
 	}
 }
@@ -471,7 +534,6 @@ static void page_fare4(void)
 	static int64_t base_rial;
 	static int cur;
 	static bool entered;
-	static bool skip_rel[4]; /* the key that opened this page is still down: ignore its release */
 	meter_snap_t s[4];
 
 	for (int i = 0; i < 4; i++) {
@@ -488,9 +550,6 @@ static void page_fare4(void)
 			if (s[i].active) {
 				cur = i;
 			}
-		}
-		for (int i = 0; i < 4; i++) {
-			skip_rel[i] = STILL(i + 1);
 		}
 	}
 
@@ -514,10 +573,6 @@ static void page_fare4(void)
 
 	for (int n = 0; n < 4; n++) {
 		if (!RELEASED(n + 1)) {
-			continue;
-		}
-		if (skip_rel[n]) {
-			skip_rel[n] = false;
 			continue;
 		}
 		BEEP_MENU();
@@ -769,6 +824,22 @@ static void ui_thread(void *a, void *b, void *c)
 		next += UI_PERIOD_MS;
 		now = k_uptime_get();
 		key_poll(&k);
+		if (wait_release) {
+			bool down = false;
+
+			for (int i = 0; i < KEY_COUNT; i++) {
+				down |= k.still[i];
+			}
+			wait_release = down;
+			memset(k.pressed, 0, sizeof(k.pressed));
+			memset(k.released, 0, sizeof(k.released));
+			memset(k.still, 0, sizeof(k.still));
+		}
+		/* menu pages go back to the main page by themselves after 30 s without a key */
+		if ((page == P_MENU || page == P_INFO || page == P_REPORT) && k.rest_ms > MENU_IDLE_MS) {
+			menu_reset();
+			goto_page(P_MAIN);
+		}
 
 		switch (page) {
 		case P_MAIN:    page_main(); break;

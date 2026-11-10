@@ -17,9 +17,18 @@ int cfg_service_count(void);
 int cfg_service(int idx);
 
 /* Reserve ("nobat") page: scan for the dispatch AP */
-void net_reserve_scan_request(void);
-bool net_reserve_found(void);
-void net_reserve_reset(void);
+/* Nobat (queue at a taxi station). The UI calls these; the net thread does the network work.
+ *   begin: look for the station WiFi (SSID "Usefi"), then tell the server "ready" (NobatReady)
+ *          and ask for the place in the queue every 5 s (NobatStatus).
+ *   board: the passenger is in. Tells the server (NobatBoard, through the upload queue) and
+ *          remembers the queue id: the next single-meter trip end carries it (nobat_id).
+ *   leave: leave the queue (NobatLeave, only if the car had joined). */
+typedef enum { NB_OFF = 0, NB_SEARCH, NB_JOIN, NB_WAIT, NB_TURN } nb_phase_t;
+void net_nobat_begin(void);
+void net_nobat_leave(void);
+void net_nobat_board(void);
+nb_phase_t net_nobat_phase(void);
+int net_nobat_position(void); /* 1 = you are next */
 
 const char *net_serial(void);
 

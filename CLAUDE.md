@@ -35,6 +35,7 @@ gcc -O1 -fsanitize=address,undefined -o /tmp/tf zephyr-app/core/fare_engine.c ze
 gcc -O1 -fsanitize=address,undefined -o /tmp/tj zephyr-app/core/json_lite.c zephyr-app/tests/test_json.c -lm && /tmp/tj   # JSON reader + fuzz
 gcc -O1 -fsanitize=address,undefined -o /tmp/tu zephyr-app/core/urlq.c zephyr-app/tests/test_urlq.c && /tmp/tu   # request builder
 gcc -O1 -fsanitize=address,undefined -o /tmp/to zephyr-app/core/ota_logic.c zephyr-app/tests/test_ota.c && /tmp/to   # OTA version/header/url logic
+gcc -O1 -fsanitize=address,undefined -Izephyr-app/core -o /tmp/tn zephyr-app/core/nobat.c zephyr-app/core/json_lite.c zephyr-app/tests/test_nobat.c -lm && /tmp/tn   # nobat answer reader
 zephyr-app/tests/native/run.sh                               # queue, flash, trip, report, tariff JSON (native_sim)
 python3 zephyr-app/tests/lint_text.py zephyr-app/src/ui.c     # every UI text fits the 7-seg and is readable
 BUILD_DIR=<fw build> MBEDTLS_DIR=<ws>/modules/crypto/mbedtls zephyr-app/tests/tls/check_tls.sh   # TLS suites + SNI against openssl servers
@@ -52,6 +53,7 @@ Run all of them after any change. The native test runs the same binary several t
 | `core/json_lite.c/.h` | Own tolerant JSON reader (no heap): any key order, nesting, `true`/`1.5`/`"46"` numbers, escapes, depth and size limits. Host tested + 300k-case fuzz |
 | `core/urlq.c/.h` | Safe builder for `path?key=value` requests: percent-encoding, overflow detection |
 | `core/ota_logic.c/.h` | OTA pure logic: version compare, MCUboot header check, https URL check, "download this offer?" |
+| `core/nobat.c/.h` | Reads the queue answer of the server (`state`, `position`, `nobat_id`). Host tested |
 | `src/main.c` | Boot order, fatal-error handler (reboots), restores a running trip |
 | `src/meter.c/.h` | `meter` thread (1 s tick), channels, tariffs, live speed, export/import of trips |
 | `src/pulse.c` | GPIO32 interrupt counter with a 100 us glitch filter |
@@ -84,7 +86,8 @@ was used for 0.5 s (a flash write can stall the system for a few ms).
 - Speed = pulses per second * 36 / PM. Distance is shown as km with one decimal (`1.2`).
 - Server fields at trip end: `traffic_price` = waiting cost, `trip_price` = total - traffic (start fare + distance),
   `night_price` = the part of `trip_price` charged at night rates (full amount), `total_price`. Real `avg_speed`, `max_speed`,
-  distance, duration, waiting seconds. `traffic_distance` is still 0.
+  distance, duration, waiting seconds. `traffic_distance` is still 0. A single-meter trip that came from the station
+  queue also carries `nobat_id`.
 
 ### Screens on the 12 digits (big field 8 digits, small field 4 digits)
 
@@ -106,10 +109,13 @@ Errors (big field, with one long low beep): `E-403` = license expired (stays on 
 `E-001` = that meter mode is switched off in the tariff. Menu and OFF still work when expired.
 
 **MENU** has two pages. K1 switches the page at once (small shows `P-1` / `P-2`). For the other keys: press once = name, press again = enter. K5 = back.
+An item switched off in the tariff shows `OFF ` with a low beep (instead of doing nothing). MENU, INFO and REPORT go back to the main page
+by themselves after 30 s without a key. On every page change the key that caused it is ignored until it is released
+(so a hold on one page never acts on the next page).
 
 | Page | K2 | K3 | K4 |
 |---|---|---|---|
-| 1 | `SAMR` service numbers | `NOBT` queue (looks for AP `Usefi`) | `TARF` reload tariff |
+| 1 | `SAMR` service numbers | `NOBT` station queue | `TARF` reload tariff |
 | 2 | `INFO` | `rEPT` report | `CAL ` PM measure |
 
 **INFO** (K2 next, K3 previous, K5 back): `NET  ON`/`NET OFF`, `HOST UP`/`HOST BAD`/`HOST ---` (last HTTPS result),
@@ -135,6 +141,15 @@ small field `A  n` = how many. The state stays when you leave the page (it is lo
 
 **Tariff 3** (long trips): single meter only. After `trip3` pulses the trip is charged with `Cost3_200` / `Cost3_stop`
 (distance and waiting). Not used in the 4-channel mode (same as the Arduino code).
+
+**NOBT** (queue at a taxi station). Small field = clock, big field = what is going on:
+`SEArCH` (looking for the station WiFi `Usefi`) -> `SEnd` (telling the server "ready") -> `nobt   3` (place in the queue, 1 = next)
+-> `tUrn` blinking + a beep every 10 s (your turn). **K3** at `tUrn` = passenger is in: the single meter starts at once and the
+trip end carries `nobat_id`. `nEt  OFF` = no WiFi. Hold K5 3 s = leave the queue (server is told), back to the menu.
+Server calls (designed by us, **the real server must add them**): `POST NobatReady?serial=` and `GET NobatStatus?serial=`
+answer `{"state":"wait|turn|none","position":n,"nobat_id":id}` (polled every 5 s, `none` = join again);
+`POST NobatBoard?serial=&nobat_id=` and `POST NobatLeave?serial=&nobat_id=` go through the upload queue (survive power loss).
+The queue id of a running trip is lost at a reboot (the trip end then has no `nobat_id`).
 
 ### OTA (firmware update) - read `zephyr-app/README.md` before touching it
 

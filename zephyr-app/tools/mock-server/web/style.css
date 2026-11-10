@@ -90,9 +90,9 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .badge.info { background: var(--info-bg); color: var(--info); border-color: transparent; }
 .badge.acc { background: var(--accent-2); color: var(--accent-text); border-color: transparent; }
 .k-TARIFF { background: #e8efff; color: #3651c9; } .k-START { background: #e6f6ef; color: #1b8a4c; } .k-END { background: #ecf9e8; color: #3d8a1b; }
-.k-SERVICE { background: #f3ecff; color: #7046c7; } .k-FIRMWARE { background: #fff2e0; color: #b46b07; } .k-TLS, .k-ERROR, .k-OTHER { background: #fdecec; color: #c62f35; }
+.k-SERVICE { background: #f3ecff; color: #7046c7; } .k-NOBAT { background: #e3f5f7; color: #127a86; } .k-FIRMWARE { background: #fff2e0; color: #b46b07; } .k-TLS, .k-ERROR, .k-OTHER { background: #fdecec; color: #c62f35; }
 :root[data-theme="dark"] .k-TARIFF { background: #1f2741; color: #a9b7ff; } :root[data-theme="dark"] .k-START, :root[data-theme="dark"] .k-END { background: #143224; color: #6fdca3; }
-:root[data-theme="dark"] .k-SERVICE { background: #2a2140; color: #c7b1ff; } :root[data-theme="dark"] .k-FIRMWARE { background: #3a2c12; color: #f5c06a; }
+:root[data-theme="dark"] .k-SERVICE { background: #2a2140; color: #c7b1ff; } :root[data-theme="dark"] .k-NOBAT { background: #133338; color: #7fd8e2; } :root[data-theme="dark"] .k-FIRMWARE { background: #3a2c12; color: #f5c06a; }
 :root[data-theme="dark"] .k-TLS, :root[data-theme="dark"] .k-ERROR, :root[data-theme="dark"] .k-OTHER { background: #3b1b1d; color: #ff9599; }
 
 /* ---------- buttons / inputs ---------- */

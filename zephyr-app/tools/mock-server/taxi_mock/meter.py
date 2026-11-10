@@ -153,7 +153,7 @@ class Meter:
         sc = self.st["scenario"]
         target = sc.get("transport_target", "all")
         group = {"TARIFF": "tariff", "START": "records", "END": "records", "SERVICE": "records",
-                 "FIRMWARE": "firmware"}.get(kind, "")
+                 "NOBAT": "records", "FIRMWARE": "firmware"}.get(kind, "")
         mode = sc.get("transport", "normal")
         if mode == "normal" or (target != "all" and target != group):
             return "normal", ""
@@ -298,7 +298,22 @@ class Meter:
             dup = self.db.one("SELECT id FROM trips WHERE fingerprint=? ORDER BY id LIMIT 1", (fp,))
             if dup:
                 problems.append(f"duplicate: the same trip arrived before (trip #{dup['id']})")
-            trip = dict(r, serial=serial, start_time=p.get("start_time", ""), stop_time=p.get("stop_time", ""),
+            nid = None
+            if "nobat_id" in p:
+                if not INT_RE.match(p["nobat_id"]):
+                    problems.append(f"nobat_id is not an integer: {p['nobat_id']!r}")
+                else:
+                    nid = int(p["nobat_id"])
+                    row = self.db.one("SELECT * FROM nobat WHERE id=?", (nid,))
+                    if not row:
+                        problems.append(f"nobat_id {nid} is unknown")
+                    elif row["serial"] != serial:
+                        problems.append(f"nobat_id {nid} belongs to another meter ({row['serial']})")
+                    elif row["state"] != "boarded":
+                        problems.append(f"nobat_id {nid}: trip end, but the queue entry is '{row['state']}' (no NobatBoard)")
+                    if v["bt_number"] != 5:
+                        problems.append("nobat_id on a 4-channel trip (only the single meter is used for the queue)")
+            trip = dict(r, serial=serial, start_time=p.get("start_time", ""), stop_time=p.get("stop_time", ""), nobat_id=nid,
                         expected_low=fc["low"], expected_high=fc["high"],
                         fare_check=f"{fc['verdict']}: {fc['text']} [{source}]",
                         duplicate_of=dup["id"] if dup else None, fingerprint=fp)
@@ -335,9 +350,25 @@ class Meter:
                 problems.append(f"missing {k}")
         if "start" in p and p["start"] not in ("1", "2"):
             problems.append("start must be 1 or 2")
+        notes = []
         if "serviceNum" in p and not INT_RE.match(p["serviceNum"]):
             problems.append("serviceNum is not an integer")
-        return problems, []
+        elif serial and "serviceNum" in p and p.get("start") in ("1", "2"):
+            num = int(p["serviceNum"])
+            o = self.db.one("SELECT ts FROM open_services WHERE serial=? AND service=?", (serial, num))
+            if p["start"] == "1":
+                if o:
+                    problems.append(f"service {num} started again without an end (first start at "
+                                    f"{time.strftime('%H:%M:%S', time.localtime(o['ts']))})")
+                self.db.x("INSERT INTO open_services(serial, service, ts) VALUES(?,?,?) ON CONFLICT(serial, service)"
+                          " DO UPDATE SET ts=excluded.ts", (serial, num, time.time()))
+            else:
+                if not o:
+                    notes.append(f"service {num} ended without a start (the meter may have dropped it, or rebooted)")
+                else:
+                    notes.append(f"service {num} took {int(time.time() - o['ts'])} s")
+                self.db.x("DELETE FROM open_services WHERE serial=? AND service=?", (serial, num))
+        return problems, notes
 
     async def record(self, q: Req, kind):
         p = dict(q.query)
@@ -367,6 +398,116 @@ class Meter:
         if sc == "redirect301":
             return self.finish(r, kind, serial, p, problems, notes + ["scenario: 301"], trip)
         return self.finish(jreply({"ok": True}), kind, serial, p, problems, notes, trip)
+
+    # ---------------------------------------------------------------- nobat (queue at a station)
+    NOBAT_STALE_S = 90  # a car that did not ask for 90 s has left (power off, out of range)
+
+    def nobat_advance(self):
+        """Drop cars that stopped asking; give the turn to the first car (auto mode)."""
+        now = time.time()
+        self.db.x("UPDATE nobat SET state='expired', done_at=? WHERE state IN ('wait','turn') AND last_seen < ?",
+                  (now, now - self.NOBAT_STALE_S))
+        auto = float(self.st["nobat"].get("auto_s", 0) or 0)
+        if auto <= 0 or self.db.one("SELECT id FROM nobat WHERE state='turn'"):
+            return
+        head = self.db.one("SELECT * FROM nobat WHERE state='wait' ORDER BY joined, id LIMIT 1")
+        if not head:
+            return
+        last = self.db.one("SELECT max(done_at) AS t FROM nobat WHERE state!='wait' AND state!='turn'")["t"] or 0
+        if now - max(head["joined"], last) >= auto:
+            self.db.x("UPDATE nobat SET state='turn', turn_at=? WHERE id=?", (now, head["id"]))
+
+    def nobat_give_turn(self):
+        if self.db.one("SELECT id FROM nobat WHERE state='turn'"):
+            return None
+        head = self.db.one("SELECT * FROM nobat WHERE state='wait' ORDER BY joined, id LIMIT 1")
+        if head:
+            self.db.x("UPDATE nobat SET state='turn', turn_at=? WHERE id=?", (time.time(), head["id"]))
+        return head
+
+    def nobat_queue(self):
+        rows = self.db.q("SELECT * FROM nobat WHERE state IN ('wait','turn') ORDER BY state='turn' DESC, joined, id")
+        for i, r in enumerate(rows):
+            r["position"] = i + 1
+        return rows
+
+    def nobat_info(self, serial):
+        for r in self.nobat_queue():
+            if r["serial"] == serial:
+                return {"state": r["state"], "position": r["position"], "nobat_id": r["id"]}
+        return {"state": "none", "position": 0, "nobat_id": 0}
+
+    async def nobat(self, q: Req, action):
+        p = dict(q.query)
+        serial = p.get("serial", "")
+        params = dict(p, action=action)
+        if not self.allowed(serial):
+            return self.finish(treply("unknown serial", 404), "NOBAT", serial, params, notes=["serial not in the allowed list"])
+        pre = await self.prelude("NOBAT")
+        if pre:
+            return self.finish(pre, "NOBAT", serial, params, notes=["scenario: random failure"])
+        problems, notes = [], []
+        if not serial:
+            problems.append("missing serial")
+            return self.finish(jreply({"error": "missing serial"}, 400), "NOBAT", serial, params, problems)
+        res = self.resolve(serial)
+        if res.get("block"):
+            code, why = res["block"]
+            return self.finish(treply("not allowed", code), "NOBAT", serial, params, notes=[why])
+        now = time.time()
+        self.nobat_advance()
+        mine = self.db.one("SELECT * FROM nobat WHERE serial=? AND state IN ('wait','turn')", (serial,))
+        if mine:
+            self.db.x("UPDATE nobat SET last_seen=? WHERE id=?", (now, mine["id"]))
+        if action == "ready":
+            if mine:
+                notes.append(f"already in the queue (#{mine['id']}): answered with its place")
+            else:
+                self.db.x("INSERT INTO nobat(serial, joined, last_seen, state) VALUES(?,?,?,'wait')", (serial, now, now))
+                self.nobat_advance()
+            info = self.nobat_info(serial)
+            notes.append(f"queue #{info['nobat_id']}: place {info['position']}, {info['state']}")
+            return self.finish(jreply(info), "NOBAT", serial, params, problems, notes)
+        if action == "status":
+            info = self.nobat_info(serial)
+            if info["state"] == "none":
+                notes.append("not in the queue: the meter should send NobatReady again")
+            return self.finish(jreply(info), "NOBAT", serial, params, problems, notes)
+        # board / leave come through the meter's upload queue: they can arrive late or twice
+        nid = p.get("nobat_id", "")
+        row = None
+        if nid:
+            if not INT_RE.match(nid):
+                problems.append(f"nobat_id is not an integer: {nid!r}")
+            else:
+                row = self.db.one("SELECT * FROM nobat WHERE id=?", (int(nid),))
+                if not row:
+                    problems.append(f"nobat_id {nid} is unknown")
+                elif row["serial"] != serial:
+                    problems.append(f"nobat_id {nid} belongs to another meter ({row['serial']})")
+                    row = None
+        else:
+            row = mine
+            notes.append("no nobat_id: used the meter's open queue entry")
+        if action == "board":
+            if row and row["state"] == "turn":
+                self.db.x("UPDATE nobat SET state='boarded', done_at=? WHERE id=?", (now, row["id"]))
+                notes.append(f"queue #{row['id']}: passenger is in, after {int(now - row['joined'])} s in the queue")
+            elif row and row["state"] == "wait":
+                self.db.x("UPDATE nobat SET state='boarded', done_at=? WHERE id=?", (now, row["id"]))
+                problems.append(f"queue #{row['id']}: boarded before its turn")
+            elif row:
+                notes.append(f"queue #{row['id']} is already '{row['state']}' (sent twice?)")
+            elif not problems:
+                problems.append("board without a queue entry")
+        else:  # leave
+            if row and row["state"] in ("wait", "turn"):
+                self.db.x("UPDATE nobat SET state='left', done_at=? WHERE id=?", (now, row["id"]))
+                notes.append(f"queue #{row['id']}: the car left the queue")
+            elif row:
+                notes.append(f"queue #{row['id']} is already '{row['state']}'")
+        self.nobat_advance()
+        return self.finish(jreply({"ok": True}), "NOBAT", serial, params, problems, notes)
 
     # ---------------------------------------------------------------- firmware
     async def firmware(self, q: Req, name):
@@ -406,9 +547,13 @@ class Meter:
         self.db.x(
             "INSERT INTO trips(request_id, ts, serial, bt, start_time, stop_time, distance, duration, wait, avg_speed,"
             " max_speed, trip_price, traffic_price, night_price, total, expected_low, expected_high, fare_check,"
-            " duplicate_of, problems, fingerprint, driver_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " duplicate_of, problems, fingerprint, driver_id, nobat_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (request_id, time.time(), trip["serial"], trip["bt"], trip["start_time"], trip["stop_time"],
              trip["distance"], trip["duration"], trip["wait"], trip["avg_speed"], trip["max_speed"],
              trip["trip_price"], trip["traffic_price"], trip["night_price"], trip["total"],
              trip["expected_low"], trip["expected_high"], trip["fare_check"], trip["duplicate_of"],
-             json.dumps(problems), trip["fingerprint"], (self.db.driver_by_serial(trip["serial"]) or {}).get("id")))
+             json.dumps(problems), trip["fingerprint"], (self.db.driver_by_serial(trip["serial"]) or {}).get("id"),
+             trip.get("nobat_id")))
+        if trip.get("nobat_id") and not trip.get("duplicate_of"):
+            tid = self.db.one("SELECT max(id) AS id FROM trips")["id"]
+            self.db.x("UPDATE nobat SET trip_id=? WHERE id=? AND trip_id IS NULL", (tid, trip["nobat_id"]))

@@ -47,6 +47,13 @@ python simulate_meter.py --port 8443 --meters 3 --trips 8 --bad 1 --dup 1
 downloads the tariff like a meter and sends trips (one wrong fare and one duplicate per meter on purpose), so every page
 has data.
 
+```
+python simulate_meter.py --port 8443 --meters 3 --nobat
+```
+
+puts 3 cars in the station queue. Give the turn on the **Queue & Samar** page (or set "give the turn by itself");
+each car then takes its passenger and sends one trip with its queue id.
+
 ## Pages
 
 | Page | What it does |
@@ -54,6 +61,7 @@ has data.
 | Dashboard | Meters online, calls per minute (chart), calls by type, trips and income per day, latest problems |
 | Drivers | Register drivers: name, phone, plate, car, device serial, license end date, tariff profile, own prices, own service numbers, own WiFi, on/off. Shows exactly what the meter gets when it connects. What a meter **without** a driver gets: main tariff, 403 or 404 |
 | Devices | Every meter that called: online, IP, TLS, calls, trips, problems; per-device price override or "expired"; **Register** button |
+| Queue & Samar | Station queue (nobat): cars, place, state, last contact; give the turn by hand or after N seconds; remove a car; history with the trip of each turn. Samar: children on the way (started, not arrived) |
 | Trips | All trips with driver, distance, time, waiting, fare, the **expected** fare range and the result of the fare check; duplicates marked; CSV |
 | Live log | Every call (live), filters, red = record with an error, yellow = note; details of each call; CSV |
 | Tariff | Main prices as a form or JSON, service numbers, WiFi, and **tariff profiles** (e.g. airport, city) for drivers |
@@ -88,6 +96,23 @@ expired gets **HTTP 403**, so the meter shows `E-403`. A meter without a driver 
   free distance and time, rounding, tariff 3). Tested against 3000 random trips of the meter's own fare engine with no
   false alarm; it catches most errors above about 5 %.
 - **Duplicates** (the same trip arrives twice) and **order** (a trip end without a start, a second start on a channel).
+- **Samar**: each service number on its own: a second `start=1` without `start=2` is an error, `start=2` without a start is a note
+  (many children can be on the way at once).
+- **Queue**: boarding before the turn, an unknown or foreign `nobat_id`, a trip end with a `nobat_id` that was never boarded.
+
+## Queue (nobat) calls
+
+These are **not** on the real server yet: they are the design the firmware uses. Give them to the server developer.
+
+| Call | Answer |
+|---|---|
+| `POST /api/taxi/NobatReady?serial=S` | join the queue (twice = same place): `{"state":"wait","position":3,"nobat_id":17}` |
+| `GET /api/taxi/NobatStatus?serial=S` | every 5 s: `state` = `wait` / `turn` / `none` (not in the queue: join again) |
+| `POST /api/taxi/NobatBoard?serial=S&nobat_id=17` | passenger is in (may arrive late or twice) |
+| `POST /api/taxi/NobatLeave?serial=S&nobat_id=17` | the car left the queue |
+| `SetTaxiEnd?...&nobat_id=17` | the trip of that turn |
+
+A car that does not ask for 90 s is dropped from the queue.
 
 ## Data
 

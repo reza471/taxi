@@ -3,9 +3,13 @@
 
   python simulate_meter.py --port 8443                       # 1 meter, 5 trips, all correct
   python simulate_meter.py --port 8443 --meters 3 --trips 8 --bad 2 --dup 1
+  python simulate_meter.py --port 8443 --meters 3 --nobat        # 3 cars wait in the station queue
 
 It downloads the tariff like the meter (same URL), computes each fare with the meter's rules, and sends
 SetTaxiStart / SetTaxiEnd / StartService. --bad sends trips with a wrong total, --dup sends some trips twice.
+--nobat: every meter joins the station queue (NobatReady), asks for its place every 2 s (NobatStatus), and when
+it gets its turn takes a passenger (NobatBoard) and sends one trip with the queue id. Give the turn on the
+admin page (Queue & Samar), or set "give the turn by itself".
 Uses only the Python standard library.
 """
 import argparse
@@ -65,9 +69,12 @@ def main():
     ap.add_argument("--bad", type=int, default=0, help="trips per meter with a wrong total")
     ap.add_argument("--dup", type=int, default=0, help="trips per meter sent twice")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--nobat", action="store_true", help="use the station queue instead of normal trips")
     a = ap.parse_args()
     rnd = random.Random(a.seed)
     base = f"https://{a.host}:{a.port}"
+    if a.nobat:
+        return nobat(base, a, rnd)
     for m in range(a.meters):
         serial = "".join(rnd.choice("0123456789ABCDEF") for _ in range(12))
         st, body = call(base, "GET", f"/api/taxi/TaxiFare?driver_type=1&serial={serial}")
@@ -105,6 +112,55 @@ def main():
                 st2, _ = call(base, "POST", q)
                 print(f"   trip {i + 1}: sent again (duplicate on purpose) -> HTTP {st2}")
             time.sleep(0.05)
+
+
+def nobat(base, a, rnd):
+    cars = {}
+    for _ in range(a.meters):
+        serial = "".join(rnd.choice("0123456789ABCDEF") for _ in range(12))
+        st, body = call(base, "POST", f"/api/taxi/NobatReady?serial={serial}")
+        try:
+            j = json.loads(body)
+        except ValueError:
+            print(f"car {serial}: NobatReady -> HTTP {st}, not JSON")
+            continue
+        cars[serial] = j
+        print(f"car {serial}: in the queue, place {j.get('position')} (#{j.get('nobat_id')})")
+    print("waiting for turns (give them on the admin page). Ctrl+C to stop.")
+    try:
+        while cars:
+            time.sleep(2)
+            for serial in list(cars):
+                st, body = call(base, "GET", f"/api/taxi/NobatStatus?serial={serial}")
+                try:
+                    j = json.loads(body)
+                except ValueError:
+                    continue
+                if j.get("state") != "turn":
+                    if j.get("position") != cars[serial].get("position"):
+                        print(f"car {serial}: place {j.get('position')}")
+                    cars[serial] = j
+                    continue
+                nid = j.get("nobat_id")
+                print(f"car {serial}: TURN -> passenger in (#{nid})")
+                call(base, "POST", f"/api/taxi/NobatBoard?serial={serial}&nobat_id={nid}")
+                call(base, "POST", f"/api/taxi/SetTaxiStart?serial={serial}&bt_number=5")
+                t = tariff_numbers(json.loads(call(base, "GET", f"/api/taxi/TaxiFare?driver_type=1&serial={serial}")[1] or b"{}"))
+                dur = rnd.randint(300, 1800)
+                dist = int(dur * rnd.uniform(3, 11))
+                wait = rnd.randint(0, dur // 3)
+                total, traffic = fare(t, 5, dist, wait)
+                q = (f"/api/taxi/SetTaxiEnd?driver_id={serial}&serial={serial}&bt_number=5&start_time=10:00"
+                     f"&stop_time=10:30&trip_distance={dist}&trip_duration={dur}&traffic_distance=0"
+                     f"&traffic_duration={wait}&avg_speed={dist * 36 // (dur * 10)}&max_speed={rnd.randint(50, 90)}"
+                     f"&trip_price={total - traffic}&traffic_price={traffic}&night_price=0&total_price={total}&nobat_id={nid}")
+                st, _ = call(base, "POST", q)
+                print(f"car {serial}: trip {total // 10:,} Toman -> HTTP {st}")
+                del cars[serial]
+    except KeyboardInterrupt:
+        for serial in cars:
+            call(base, "POST", f"/api/taxi/NobatLeave?serial={serial}")
+        print("stopped: the cars left the queue")
 
 
 if __name__ == "__main__":

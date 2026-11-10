@@ -114,6 +114,14 @@ class HttpServer:
             r = await m.record(q, "END")
         elif path == "/api/taxi/StartService" and method in ("GET", "POST"):
             r = await m.record(q, "SERVICE")
+        elif path == "/api/taxi/NobatReady" and method in ("GET", "POST"):
+            r = await m.nobat(q, "ready")
+        elif path == "/api/taxi/NobatStatus" and method == "GET":
+            r = await m.nobat(q, "status")
+        elif path == "/api/taxi/NobatBoard" and method in ("GET", "POST"):
+            r = await m.nobat(q, "board")
+        elif path == "/api/taxi/NobatLeave" and method in ("GET", "POST"):
+            r = await m.nobat(q, "leave")
         elif path.startswith("/fw/") and method == "GET":
             r = await m.firmware(q, unquote(path[4:]))
         else:

@@ -8,6 +8,7 @@ target_sources(app PRIVATE
 	core/json_lite.c
 	core/urlq.c
 	core/ota_logic.c
+	core/nobat.c
 	src/main.c
 	src/pulse.c
 	src/keys.c

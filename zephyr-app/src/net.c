@@ -23,6 +23,7 @@
 #include "trip_store.h"
 #include "report.h"
 #include "urlq.h"
+#include "nobat.h"
 #include "ota.h"
 #include "wdog.h"
 
@@ -52,9 +53,15 @@ static volatile int server_state;
 /* ---------------- post queue: see postq.c ---------------- */
 static K_SEM_DEFINE(q_wake, 0, 1);
 
-/* ---------------- reserve scan ---------------- */
-static volatile bool reserve_scan_req;
-static volatile bool reserve_found;
+/* ---------------- nobat (queue at a station) ---------------- */
+static volatile bool reserve_found;   /* the station WiFi was seen in a scan */
+static volatile int nb_phase;         /* nb_phase_t, written by both threads under nb_gen */
+static volatile int nb_pos;
+static volatile int64_t nb_id;        /* queue id from the server */
+static volatile uint32_t nb_gen;      /* changes on begin/leave/board: an old answer is thrown away */
+static int64_t trip_nobat_id;         /* added to the next single-meter trip end */
+#define NOBAT_POLL_MS 5000
+static K_MUTEX_DEFINE(nb_lock);       /* short: never held during a network call */
 
 int net_server_state(void)
 {
@@ -81,20 +88,63 @@ int cfg_service(int idx)
 	return (idx >= 0 && idx < SERVICE_MAX) ? persist.service[idx] : 0;
 }
 
-void net_reserve_scan_request(void)
+void net_nobat_begin(void)
 {
-	reserve_scan_req = true;
-}
-
-bool net_reserve_found(void)
-{
-	return reserve_found;
-}
-
-void net_reserve_reset(void)
-{
+	k_mutex_lock(&nb_lock, K_FOREVER);
+	nb_gen++;
 	reserve_found = false;
-	reserve_scan_req = false;
+	nb_pos = 0;
+	nb_id = 0;
+	nb_phase = NB_SEARCH;
+	k_mutex_unlock(&nb_lock);
+}
+
+static void nobat_post(const char *head, bool with_id)
+{
+	char url[URL_MAX];
+	urlq_t q;
+
+	urlq_init(&q, url, sizeof(url), head);
+	urlq_str(&q, "serial", serial);
+	if (with_id && nb_id > 0) {
+		urlq_int(&q, "nobat_id", nb_id);
+	}
+	if (urlq_ok(&q)) {
+		net_post(url);
+	}
+}
+
+void net_nobat_leave(void)
+{
+	k_mutex_lock(&nb_lock, K_FOREVER);
+	int ph = nb_phase;
+
+	nb_gen++;
+	nb_phase = NB_OFF;
+	k_mutex_unlock(&nb_lock);
+	if (ph == NB_WAIT || ph == NB_TURN) {
+		nobat_post("/api/taxi/NobatLeave?", true);
+	}
+}
+
+void net_nobat_board(void)
+{
+	k_mutex_lock(&nb_lock, K_FOREVER);
+	nb_gen++;
+	nb_phase = NB_OFF;
+	k_mutex_unlock(&nb_lock);
+	nobat_post("/api/taxi/NobatBoard?", true);
+	trip_nobat_id = nb_id;
+}
+
+nb_phase_t net_nobat_phase(void)
+{
+	return (nb_phase_t)nb_phase;
+}
+
+int net_nobat_position(void)
+{
+	return nb_pos;
 }
 
 /* ---------------- public helpers used by the UI ---------------- */
@@ -166,6 +216,10 @@ void trip_submit(int bt, const meter_snap_t *s, const char *start_hhmm)
 	urlq_int(&q, "traffic_price", s->traffic_price);
 	urlq_int(&q, "night_price", s->night_price);
 	urlq_int(&q, "total_price", s->total_rial);
+	if (bt == 5 && trip_nobat_id > 0) {
+		urlq_int(&q, "nobat_id", trip_nobat_id); /* this trip came from the station queue */
+	}
+	trip_nobat_id = 0;
 	if (!urlq_ok(&q)) {
 		LOG_ERR("trip record too long, NOT queued");
 		return;
@@ -511,6 +565,54 @@ static bool queue_send_head(void)
 	return false;
 }
 
+/* ---------------- nobat poll (net thread, every 5 s while the nobat page is open) ---------------- */
+static void nobat_poll(void)
+{
+	uint32_t gen = nb_gen;
+	int ph = nb_phase;
+
+	if (ph == NB_SEARCH) {
+		if (reserve_found) {
+			k_mutex_lock(&nb_lock, K_FOREVER);
+			if (gen == nb_gen) {
+				nb_phase = NB_JOIN; /* station WiFi seen: say "ready" now */
+			}
+			k_mutex_unlock(&nb_lock);
+			ph = NB_JOIN;
+		} else {
+			wifi_scan(); /* the result arrives as an event (reserve_found) */
+			return;
+		}
+	}
+
+	static char body[384];
+	char path[80];
+	bool join = (ph == NB_JOIN);
+
+	snprintf(path, sizeof(path), "/api/taxi/%s?serial=%s", join ? "NobatReady" : "NobatStatus",
+		 serial);
+	int st = https_request(join ? HTTP_POST : HTTP_GET, path, body, sizeof(body));
+	nobat_info_t inf;
+
+	if (st != 200 || !nobat_parse(body, strlen(body), &inf)) {
+		LOG_WRN("nobat: %s failed (%d)", join ? "ready" : "status", st);
+		return; /* try again in 5 s, keep the last known place */
+	}
+	k_mutex_lock(&nb_lock, K_FOREVER);
+	if (gen == nb_gen) { /* else the driver left or boarded meanwhile: drop the answer */
+		if (inf.id > 0) {
+			nb_id = inf.id;
+		}
+		nb_pos = inf.position;
+		if (inf.state == NOBAT_NONE) {
+			nb_phase = NB_JOIN; /* the server lost us: join again */
+		} else {
+			nb_phase = inf.state == NOBAT_TURN ? NB_TURN : NB_WAIT;
+		}
+	}
+	k_mutex_unlock(&nb_lock);
+}
+
 /* ---------------- thread ---------------- */
 #define SEND_BACKOFF_MIN_MS 5000
 #define SEND_BACKOFF_MAX_MS 120000
@@ -597,9 +699,9 @@ static void net_thread(void *a, void *b, void *c)
 			tariff_requested = true; /* periodic refresh */
 		}
 
-		if (reserve_scan_req && now - last_scan >= 5000) {
+		if (nb_phase != NB_OFF && now - last_scan >= NOBAT_POLL_MS) {
 			last_scan = now;
-			wifi_scan();
+			nobat_poll();
 		}
 
 		/* firmware: confirm a test image, download an offered one, reboot into it */
