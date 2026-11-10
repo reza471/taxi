@@ -97,6 +97,7 @@ def default_state():
         "admin_token": secrets.token_urlsafe(12),
         "allowed_serials": [],
         "unregistered": "default",  # what a meter without a driver gets: default | expired | refuse
+        "nobat": {"auto_s": 20},     # queue: give the turn to the first car after this many seconds (0 = by hand)
     }
 
 

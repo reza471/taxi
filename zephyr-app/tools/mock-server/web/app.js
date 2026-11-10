@@ -41,12 +41,13 @@ const I = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', plus: '<path d="M12 5v14M5 12h14"/>',
   dl: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  queue: '<path d="M4 6h10M4 12h10M4 18h10"/><circle cx="19" cy="6" r="1.6"/><circle cx="19" cy="12" r="1.6"/><circle cx="19" cy="18" r="1.6"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/>', copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
 };
 const icon = (n, cls = "") => `<svg viewBox="0 0 24 24" class="${cls}">${I[n]}</svg>`;
 
 const PAGES = [
-  ["dashboard", "Dashboard", "dash"], ["drivers", "Drivers", "user"], ["devices", "Devices", "dev"], ["trips", "Trips", "trip"], ["requests", "Live log", "req"],
+  ["dashboard", "Dashboard", "dash"], ["drivers", "Drivers", "user"], ["devices", "Devices", "dev"], ["trips", "Trips", "trip"], ["queue", "Queue & Samar", "queue"], ["requests", "Live log", "req"],
   ["tariff", "Tariff", "tag"], ["scenarios", "Trouble makers", "zap"], ["firmware", "Firmware (OTA)", "fw"],
   ["time", "Time (NTP)", "clock"], ["tls", "TLS", "lock"], ["settings", "Settings", "gear"],
 ];
@@ -355,7 +356,7 @@ VIEWS.trips = async () => {
 };
 function tripDrawer(r) {
   openDrawer(`Trip #${r.id}`, `
-    <div class="kv"><div>Driver</div><div>${esc(r.driver || "not registered")}</div><div>Serial</div><div class="mono">${esc(r.serial)}</div><div>Meter</div><div>${r.bt === 5 ? "single meter" : "channel " + r.bt}</div>
+    <div class="kv"><div>Driver</div><div>${esc(r.driver || "not registered")}</div><div>Serial</div><div class="mono">${esc(r.serial)}</div><div>Meter</div><div>${r.bt === 5 ? "single meter" : "channel " + r.bt}${r.nobat_id ? ` &middot; from queue #${r.nobat_id}` : ""}</div>
     <div>Start - stop</div><div>${esc(r.start_time)} - ${esc(r.stop_time)}</div><div>Distance</div><div>${fmt(r.distance)} m</div>
     <div>Duration</div><div>${fmt(r.duration)} s</div><div>Waiting</div><div>${fmt(r.wait)} s</div><div>Speed avg / max</div><div>${r.avg_speed} / ${r.max_speed} km/h</div>
     <div>Trip price</div><div>${fmt(r.trip_price)} Rial</div><div>Waiting price</div><div>${fmt(r.traffic_price)} Rial</div><div>Night part</div><div>${fmt(r.night_price)} Rial</div>
@@ -365,12 +366,54 @@ function tripDrawer(r) {
     <p class="muted small mt">The check recomputes the fare from the tariff this meter downloaded. It catches most errors above about 5 %.</p>`);
 }
 
+/* ---------------------------------------------------------------- queue (nobat) + samar */
+const NB_STATE = { wait: ["waiting", ""], turn: ["TURN", "warn"], boarded: ["passenger in", "ok"], left: ["left", ""], expired: ["lost (no contact)", "bad"] };
+const nbBadge = s => { const [t, c] = NB_STATE[s] || [s, ""]; return `<span class="badge ${c}">${esc(t)}</span>`; };
+const secs = s => s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+VIEWS.queue = async () => {
+  const draw = async () => {
+    const d = await api("GET", "/admin/api/nobat");
+    const who = r => r.driver ? `<b>${esc(r.driver)}</b><div class="small muted mono">${esc(r.serial)}</div>` : `<span class="mono">${esc(r.serial)}</span>`;
+    $("#view").innerHTML = banner() + `
+      <div class="grid g-kpi">
+        ${kpiCard("Cars in the queue", d.queue.length, d.queue.length ? `first: ${esc(d.queue[0].driver || d.queue[0].serial)}` : "station is empty", d.queue.length ? "ok" : "")}
+        ${kpiCard("Has the turn", d.queue.filter(r => r.state === "turn").length, "waits for its passenger")}
+        ${kpiCard("Samar on the way", d.services.length, "children picked up, not arrived yet", d.services.length ? "warn" : "")}
+      </div>
+      <div class="card mt"><div class="head"><div><h3>Station queue (nobat)</h3>
+        <p class="sub">A meter joins when it sees the station WiFi <span class="mono">Usefi</span> and asks for its place every 5 s. A car that does not ask for ${d.stale_s} s is dropped.</p></div></div>
+        <div class="row"><label class="f grow" style="margin:0"><span>Give the turn by itself after (seconds, 0 = only by hand)</span><input type="number" id="nbauto" min="0" max="3600" value="${d.auto_s}" style="width:110px"></label>
+        <button class="btn pri" id="nbnext">Give turn to the first car</button></div>
+        <div class="tablewrap mt"><table><thead><tr><th class="num">Place</th><th>Car</th><th>State</th><th class="num hm">In queue</th><th class="num hm">Last contact</th><th class="num hm">#</th><th></th></tr></thead><tbody>
+        ${d.queue.length ? d.queue.map(r => `<tr><td class="num"><b>${r.position}</b></td><td>${who(r)}</td><td>${nbBadge(r.state)}</td><td class="num hm">${secs(r.wait_s)}</td>
+          <td class="num hm ${r.seen_s > 15 ? "muted" : ""}">${secs(r.seen_s)} ago</td><td class="num hm mono">${r.id}</td>
+          <td><button class="btn sm" data-nbdel="${r.id}">${icon("trash")} Remove</button></td></tr>`).join("")
+          : `<tr><td colspan="7" class="empty">No car in the queue. Open MENU &rarr; NOBT on a meter, or run <span class="mono">simulate_meter.py --nobat</span>.</td></tr>`}
+        </tbody></table></div></div>
+      <div class="grid g-2 mt">
+        <div class="card"><h3>Samar: children on the way</h3><p class="sub">Started (start=1) and not arrived yet (start=2).</p>
+          ${d.services.length ? `<ul class="list">${d.services.map(r => `<li><span class="badge acc">${esc(r.service)}</span><div class="t"><div>${esc(r.driver || r.serial)}</div>
+            <div class="s">on the way for ${secs(r.on_way_s)}</div></div><button class="btn sm" data-svdel="${esc(r.serial)}/${esc(r.service)}" data-tip="remove">${icon("trash")}</button></li>`).join("")}</ul>`
+            : `<div class="empty">nobody on the way</div>`}</div>
+        <div class="card"><h3>Queue history</h3><p class="sub">last 30 cars that left the queue</p>
+          ${d.history.length ? `<ul class="list">${d.history.map(r => `<li>${nbBadge(r.state)}<div class="t"><div>${esc(r.driver || r.serial)} <span class="muted small mono">#${r.id}</span></div>
+            <div class="s">${r.done_at ? hms(r.done_at) : "-"} &middot; ${secs(Math.max(0, Math.round((r.done_at || r.joined) - r.joined)))} in queue${r.trip_id ? ` &middot; trip #${r.trip_id}: ${toman(r.trip_total)} Toman` : r.state === "boarded" ? " &middot; trip not ended yet" : ""}</div></div></li>`).join("")}</ul>`
+            : `<div class="empty">no history yet</div>`}</div>
+      </div>`;
+    $("#nbnext").onclick = async () => { if (await act(() => api("POST", "/admin/api/nobat/next"), "turn given")) draw(); };
+    $("#nbauto").onchange = async e => { if (await act(() => api("PUT", "/admin/api/nobat", { auto_s: Number(e.target.value) }), "saved")) draw(); };
+    $$("[data-nbdel]").forEach(b => b.onclick = async () => { if (confirm("Remove this car from the queue?") && await act(() => api("DELETE", "/admin/api/nobat/" + b.dataset.nbdel), "removed")) draw(); });
+    $$("[data-svdel]").forEach(b => b.onclick = async () => { if (await act(() => api("DELETE", "/admin/api/services/" + b.dataset.svdel), "removed")) draw(); });
+  };
+  await draw(); every(3000, () => { if (document.activeElement?.id !== "nbauto") draw(); });
+};
+
 /* ---------------------------------------------------------------- live log */
 VIEWS.requests = async () => {
   const qs = new URLSearchParams(location.hash.split("?")[1] || "");
   const f = { kind: qs.get("kind") || "", serial: qs.get("serial") || "", problems: qs.get("problems") || "", q: "" };
   let live = true, rows = [];
-  const kinds = ["", "TARIFF", "START", "END", "SERVICE", "FIRMWARE", "TLS"];
+  const kinds = ["", "TARIFF", "START", "END", "SERVICE", "NOBAT", "FIRMWARE", "TLS"];
   $("#view").innerHTML = banner() + `
     <div class="row">
       <div class="seg" id="rkind">${kinds.map(k => `<button data-v="${k}" class="${f.kind === k ? "on" : ""}">${k || "All"}</button>`).join("")}</div>

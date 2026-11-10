@@ -39,11 +39,17 @@ CREATE TABLE IF NOT EXISTS drivers (
     serial TEXT UNIQUE, profile_id INTEGER, license_until TEXT DEFAULT '', active INTEGER DEFAULT 1,
     overrides TEXT DEFAULT '', services TEXT DEFAULT '', wifi TEXT DEFAULT '', note TEXT DEFAULT '', created REAL);
 CREATE INDEX IF NOT EXISTS ix_driver_serial ON drivers(serial);
+CREATE TABLE IF NOT EXISTS nobat (
+    id INTEGER PRIMARY KEY, serial TEXT NOT NULL, joined REAL NOT NULL, last_seen REAL,
+    state TEXT NOT NULL, turn_at REAL, done_at REAL, trip_id INTEGER);
+CREATE INDEX IF NOT EXISTS ix_nobat_state ON nobat(state, joined);
+CREATE TABLE IF NOT EXISTS open_services (serial TEXT, service INTEGER, ts REAL, PRIMARY KEY (serial, service));
 """
 
 MIGRATIONS = [  # columns added after the first version (old databases get them on start)
     ("trips", "driver_id", "INTEGER"),
     ("requests", "driver_id", "INTEGER"),
+    ("trips", "nobat_id", "INTEGER"),
 ]
 
 
@@ -116,5 +122,6 @@ class DB:
 
     def clear_logs(self):
         with self.lock:
-            for t in ("requests", "trips", "served_tariffs", "open_trips", "ntp", "devices"):
+            for t in ("requests", "trips", "served_tariffs", "open_trips", "ntp", "devices", "nobat",
+                      "open_services"):
                 self.con.execute(f"DELETE FROM {t}")

@@ -105,6 +105,9 @@ class MeterApiTest(unittest.TestCase):
         cls.s = Server(ntp=True)
         cls.jl = Path(cls.s.data) / "jl_cli"
         subprocess.run(["gcc", "-O1", "-o", str(cls.jl), str(HERE / "jl_cli.c"), str(CORE / "json_lite.c"), "-lm"], check=True)
+        cls.nb = Path(cls.s.data) / "nobat_cli"
+        subprocess.run(["gcc", "-O1", "-o", str(cls.nb), str(HERE / "nobat_cli.c"), str(CORE / "nobat.c"),
+                        str(CORE / "json_lite.c"), "-lm"], check=True)
         cls.defaults = cls.s.api("GET", "/admin/api/state")
 
     @classmethod
@@ -194,6 +197,70 @@ class MeterApiTest(unittest.TestCase):
         self.s.call("POST", "/api/taxi/StartService?&serial=AB&serviceNum=211&start=1")  # old "?&" quirk
         r = self.last("SERVICE")
         self.assertEqual((r["problems"], r["params"]["serviceNum"]), ([], "211"))
+
+    def test_service_order_many_children(self):
+        sn = "FA0000000010"
+        call = lambda num, st: self.s.call("POST", f"/api/taxi/StartService?&serial={sn}&serviceNum={num}&start={st}")
+        call(211, 1)
+        call(222, 1)  # two children on the way at the same time: fine
+        self.assertEqual(self.last("SERVICE")["problems"], [])
+        self.assertEqual(len([r for r in self.s.api("GET", "/admin/api/nobat")["services"] if r["serial"] == sn]), 2)
+        call(211, 1)
+        self.assertTrue(any("started again" in p for p in self.last("SERVICE")["problems"]))
+        call(222, 2)
+        self.assertTrue(any("took" in n for n in self.last("SERVICE")["notes"]))
+        call(233, 2)
+        self.assertTrue(any("ended without a start" in n for n in self.last("SERVICE")["notes"]))
+
+    def test_nobat_queue(self):
+        a, c = self.s.api, self.s.call
+        a("PUT", "/admin/api/nobat", {"auto_s": 0})
+        for q in a("GET", "/admin/api/nobat")["queue"]:
+            a("DELETE", f"/admin/api/nobat/{q['id']}")
+        A, B = "AB0000000001", "AB0000000002"
+        st, body, _ = c("GET", f"/api/taxi/NobatStatus?serial={A}")
+        self.assertEqual((st, json.loads(body)["state"]), (200, "none"))
+        ja = json.loads(c("POST", f"/api/taxi/NobatReady?serial={A}")[1])
+        jb = json.loads(c("POST", f"/api/taxi/NobatReady?serial={B}")[1])
+        self.assertEqual((ja["state"], ja["position"], jb["position"]), ("wait", 1, 2))
+        again = json.loads(c("POST", f"/api/taxi/NobatReady?serial={A}")[1])  # sent twice: same place
+        self.assertEqual(again["nobat_id"], ja["nobat_id"])
+        # what the meter's own reader makes of the real answer bytes
+        raw = c("GET", f"/api/taxi/NobatStatus?serial={B}")[1]
+        out = subprocess.run([str(self.nb)], input=raw, capture_output=True)
+        self.assertEqual((out.returncode, out.stdout.split()), (0, [b"1", b"2", str(jb["nobat_id"]).encode()]))
+        # boarding before the turn is a problem
+        a("POST", "/admin/api/nobat/next")
+        self.assertEqual(json.loads(c("GET", f"/api/taxi/NobatStatus?serial={A}")[1])["state"], "turn")
+        with self.assertRaises(Exception):
+            a("POST", "/admin/api/nobat/next")  # A already has the turn
+        c("POST", f"/api/taxi/NobatBoard?serial={A}&nobat_id={ja['nobat_id']}")
+        self.assertEqual(self.last("NOBAT")["problems"], [])
+        c("POST", f"/api/taxi/NobatBoard?serial={A}&nobat_id={ja['nobat_id']}")  # twice: only a note
+        self.assertEqual(self.last("NOBAT")["problems"], [])
+        self.assertEqual(json.loads(c("GET", f"/api/taxi/NobatStatus?serial={B}")[1])["position"], 1)
+        # the trip of that queue entry
+        c("POST", f"/api/taxi/SetTaxiStart?serial={A}&bt_number=5")
+        c("POST", good_end(A) + f"&nobat_id={ja['nobat_id']}")
+        self.assertEqual(self.last("END")["problems"], [])
+        trip = a("GET", f"/admin/api/trips?serial={A}")["rows"][0]
+        self.assertEqual(trip["nobat_id"], ja["nobat_id"])
+        hist = a("GET", "/admin/api/nobat")["history"]
+        self.assertEqual([h["trip_id"] for h in hist if h["id"] == ja["nobat_id"]], [trip["id"]])
+        # wrong ids
+        c("POST", good_end("AB0000000003") + "&nobat_id=999999")
+        self.assertTrue(any("unknown" in p for p in self.last("END")["problems"]))
+        c("POST", f"/api/taxi/NobatBoard?serial={B}&nobat_id={jb['nobat_id']}")
+        self.assertTrue(any("before its turn" in p for p in self.last("NOBAT")["problems"]))
+        # auto turn + leave
+        C = "AB0000000004"
+        a("PUT", "/admin/api/nobat", {"auto_s": 1})
+        c("POST", f"/api/taxi/NobatReady?serial={C}")
+        time.sleep(1.2)
+        self.assertEqual(json.loads(c("GET", f"/api/taxi/NobatStatus?serial={C}")[1])["state"], "turn")
+        c("POST", f"/api/taxi/NobatLeave?serial={C}")
+        self.assertEqual(json.loads(c("GET", f"/api/taxi/NobatStatus?serial={C}")[1])["state"], "none")
+        a("PUT", "/admin/api/nobat", {"auto_s": 20})
 
     def test_post_scenarios(self):
         for sc, code in (("error500", 500), ("bad_request", 400), ("redirect301", 301)):
